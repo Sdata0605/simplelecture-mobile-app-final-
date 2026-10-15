@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "728991351932",
+    "project_id": "simple-lecture-1d414",
+    "storage_bucket": "simple-lecture-1d414.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:728991351932:android:f381b95c58e83f622e75f9",
+        "android_client_info": {
+          "package_name": "com.edulearn.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCohJxHWGk-xjh_efJF9Otq6r7UvOsuUsY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

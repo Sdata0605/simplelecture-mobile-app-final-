@@ -1,0 +1,33 @@
+{
+  "_description": "Live FCM test executed 2026-04-11T14:51:32Z — notification delivered to device",
+  "_curl_command": "curl -X POST https://oxwhqvsoelqqsblmqkxx.supabase.co/functions/v1/test-push-notification -H 'Authorization: Bearer <TEST_PUSH_SECRET>' -H 'Content-Type: application/json' -d '{\"user_id\":\"47a9b651-79d6-440b-a18c-9612ecf68b5a\"}'",
+  "success": true,
+  "fcmResponse": {
+    "name": "projects/simple-lecture-1d414/messages/0:1775919892744962%cca7f7d5cca7f7d5"
+  },
+  "tokenPrefix": "c3uVoe1sTOu8d3l…",
+  "platform": "android",
+  "logs": [
+    "[test-push] Request received: {\"method\":\"POST\"}",
+    "[test-push] Auth check: {\"headerPresent\":true,\"keyConfigured\":true,\"testSecretSet\":true}",
+    "[test-push] Auth passed",
+    "[test-push] Body parsed: {\"user_id\":\"47a9b651-79d6-440b-a18c-9612ecf68b5a\"}",
+    "[test-push] No fcm_token — looking up from user_push_tokens: {\"user_id\":\"47a9b651-79d6-440b-a18c-9612ecf68b5a\",\"platform\":\"android\"}",
+    "[test-push] Supabase URL: \"https://oxwhqvsoelqqsblmqkxx.s…\"",
+    "[test-push] DB lookup result: {\"count\":1}",
+    "[test-push] Token found from DB: {\"tokenPrefix\":\"c3uVoe1sTOu8d3l…\"}",
+    "[test-push] FCM_SERVICE_ACCOUNT_JSON present: true",
+    "[test-push] Service account parsed: {\"client_email\":\"firebase-adminsdk-fbsvc@simple-lecture-1d414.iam.gserviceaccount.com\"}",
+    "[test-push] Building RS256 JWT for Google token exchange",
+    "[test-push] PEM body length: 1624",
+    "[test-push] Binary key bytes: 1216",
+    "[test-push] CryptoKey imported",
+    "[test-push] JWT signed, sending to Google token endpoint",
+    "[test-push] Google token response: {\"status\":200,\"ok\":true}",
+    "[test-push] Google access token received",
+    "[test-push] Sending FCM HTTP v1 message: {\"tokenPrefix\":\"c3uVoe1sTOu8d3l…\",\"platform\":\"android\"}",
+    "[test-push] FCM message payload (token redacted): {\"notification\":{\"title\":\"🔔 Test Notification\",\"body\":\"FCM is working on android! ✅\"}}",
+    "[test-push] FCM response: {\"status\":200,\"body\":\"{\\n  \\\"name\\\": \\\"projects/simple-lecture-1d414/messages/0:1775919892744962%cca7f7d5cca7f7d5\\\"\\n}\\n\"}",
+    "[test-push] SUCCESS — notification dispatched"
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "expo": {
+    "name": "Simple Lecture",
+    "slug": "roiproject0",
+    "version": "1.0.0",
+    "scheme": "com.edulearn.mobile",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/adaptive-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.edulearn.mobile",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
+        "NSMicrophoneUsageDescription": "Simple Lecture uses your microphone so you can ask the AI assistant questions out loud while watching a lecture.",
+        "NSSpeechRecognitionUsageDescription": "Simple Lecture uses speech recognition to turn your spoken questions into text for the AI assistant.",
+        "LSApplicationQueriesSchemes": [
+          "tez",
+          "phonepe",
+          "paytm",
+          "gpay",
+          "bhim",
+          "upi"
+        ],
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": [
+              "com.edulearn.mobile"
+            ],
+            "CFBundleURLName": "com.edulearn.mobile"
+          }
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "buildNumber": "4"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#F5F5F5"
+      },
+      "package": "com.edulearn.mobile",
+      "googleServicesFile": "./google-services.json",
+      "versionCode": 14,
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#2BBD6E",
+          "sounds": []
+        }
+      ],
+      "./plugins/withFirebaseMessagingFix",
+      "./plugins/withAdiRegistration",
+      "./plugins/withTargetSdk",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Simple Lecture to access your photos to upload answer images.",
+          "cameraPermission": "Allow Simple Lecture to use your camera to capture answer images."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Simple Lecture uses your microphone so you can ask the AI assistant questions out loud while watching a lecture.",
+          "speechRecognitionPermission": "Simple Lecture uses speech recognition to turn your spoken questions into text for the AI assistant.",
+          "androidSpeechServicePackages": []
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-asset",
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static",
+            "forceStaticLinking": [
+              "RNFBApp",
+              "RNFBMessaging"
+            ]
+          }
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "owner": "prashantuser5",
+    "extra": {
+      "eas": {
+        "projectId": "17bd763f-ccd4-4c9d-8717-7e63567e08fe"
+      }
+    }
+  }
+}
