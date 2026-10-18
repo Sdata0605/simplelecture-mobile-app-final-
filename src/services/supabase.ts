@@ -4,6 +4,7 @@ import {
   DoubtSource,
   DoubtSlidePreview,
 } from '../utils/doubtThreads';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 /** Normalized data from the `ai-text-answer-proxy` Doubts answer service. */
 export interface AITextAnswerData {
@@ -31,6 +32,10 @@ export const SUPABASE_URL = 'https://supabase-proxy.utuberpraveen.workers.dev';
 // project directly with a long client timeout avoids that. Same project as the
 // anon key below (ref: oxwhqvsoelqqsblmqkxx).
 export const SUPABASE_DIRECT_URL = 'https://oxwhqvsoelqqsblmqkxx.supabase.co';
+// Deadline for the AI-tab suggestion requests (the ready-question list and the type-ahead search). They go through
+// the same host as the long AI answer request, and Android only runs 5 requests per host at once, so none of them
+// may be left hanging. The live server answers in well under a second; 10 s is generous.
+const SUGGESTION_REQUEST_TIMEOUT_MS = 10000;
 export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94d2hxdnNvZWxxcXNibG1xa3h4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk1MTU4NTgsImV4cCI6MjA3NTA5MTg1OH0.nZbWSb9AQK5uGAQmc7zXAceTHm9GRQJvqkg4-LNo_DM';
 
 export const AUTH_TOKEN_KEY = 'auth_token';
@@ -2306,7 +2311,9 @@ class SupabaseService {
     topicId?: string;
   }): Promise<{ success: boolean; questions?: PregenSuggestion[]; pending?: boolean; error?: string }> {
     try {
-      const apiBase = 'http://69.197.145.4:8000';
+      // The live AI Teaching API (same server the answer and the type-ahead search use). This used to point at
+      // 69.197.145.4, which is gone: every call hung for 150 s in the proxy and then failed with a 504.
+      const apiBase = 'http://116.202.230.124:8000';
       const qs = new URLSearchParams();
       if (params.subjectId) qs.set('subject_id', params.subjectId);
       if (params.topicId) qs.set('topic_id', params.topicId);
@@ -2316,10 +2323,12 @@ class SupabaseService {
         `${SUPABASE_DIRECT_URL}/functions/v1/ai-teaching-proxy` +
         `?path=${encodeURIComponent(apiPath)}&base=${encodeURIComponent(apiBase)}`;
 
-      const response = await fetch(proxyUrl, {
+      // Hard deadline: a request that never answers must not hold one of Android's 5 per-host connection slots,
+      // which the AI answer request shares (see fetchWithTimeout).
+      const response = await fetchWithTimeout(proxyUrl, {
         method: 'GET',
         headers: { ...this.headers, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
-      });
+      }, SUGGESTION_REQUEST_TIMEOUT_MS);
       if (!response.ok) {
         console.warn('[AI] getReadyPregenQuestions proxy status', response.status);
         return { success: false, error: `proxy ${response.status}` };
@@ -2365,11 +2374,12 @@ class SupabaseService {
         `${SUPABASE_DIRECT_URL}/functions/v1/ai-teaching-proxy` +
         `?path=${encodeURIComponent(apiPath)}&base=${encodeURIComponent(apiBase)}`;
 
-      const response = await fetch(proxyUrl, {
+      // Same deadline as the suggestion list; the caller's signal (a newer keystroke) still cancels it early.
+      const response = await fetchWithTimeout(proxyUrl, {
         method: 'GET',
         headers: { ...this.headers, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
         signal: params.signal,
-      });
+      }, SUGGESTION_REQUEST_TIMEOUT_MS);
       if (!response.ok) {
         console.warn('[AI] searchQuestions proxy status', response.status);
         return { success: false, error: `proxy ${response.status}` };

@@ -804,34 +804,35 @@ export default function TopicDetailsScreen() {
     let cancelled = false;
     let polls = 0;
     const MAX_POLLS = 10;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const clear = () => {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-    };
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     const load = async () => {
       polls++;
+      let again = false;
       try {
         const res = await supabase.getReadyPregenQuestions({ subjectId: effSubjectId, topicId });
         if (cancelled) return;
         if (res.success && Array.isArray(res.questions)) {
           setAiSuggestions(res.questions);
         }
-        if (cancelled) return;
-        if (!res.pending || polls >= MAX_POLLS) clear();
+        again = !!res.pending;
       } catch {
-        if (polls >= MAX_POLLS) clear();
+        again = true;
       }
+      if (cancelled) return;
+      // Schedule the next poll only once this one has finished. A setInterval started a new request every 3 s even
+      // while earlier ones were still waiting, so a slow or dead server stacked up requests until Android's 5 per
+      // host were all taken and the AI answer request queued behind them.
+      if (again && polls < MAX_POLLS) timer = setTimeout(load, 3000);
     };
 
     load();
-    timer = setInterval(load, 3000);
     return () => {
       cancelled = true;
-      clear();
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
     };
   }, [subjectId, topic?.subject_id, topicId]);
 
