@@ -3571,10 +3571,10 @@ export default function TopicDetailsScreen() {
               {aiError}
             </Text>
             <TouchableOpacity 
-              style={[styles.submitButton, { marginTop: spacing.lg }]}
+              style={[styles.aiActionButton, { marginTop: spacing.lg }]}
               onPress={() => {
+                // Back to the question box with what was typed still in it, so one tap on send tries again.
                 setAiError(null);
-                setAiMessage('');
               }}
               data-testid="button-try-again"
             >
@@ -3615,7 +3615,7 @@ export default function TopicDetailsScreen() {
               </View>
             )}
             <TouchableOpacity
-              style={[styles.submitButton, { marginTop: spacing.lg }]}
+              style={[styles.aiActionButton, { marginTop: spacing.lg }]}
               onPress={() => {
                 stopPresentationPlayback();
                 setAiResponse(null);
@@ -11833,6 +11833,16 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: 'bold',
     color: colors.white,
+  },
+  // The button on the AI tab's error / off-topic screens. Those screens are a centred column, and submitButton
+  // (flex: 1, made to share a row) grew to fill the column's height there: a tall green bar as wide as its label.
+  aiActionButton: {
+    minWidth: 160,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.xl,
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
   },
   fullscreenPresentationContainer: {
     flex: 1,
