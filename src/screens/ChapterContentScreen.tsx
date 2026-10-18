@@ -30,10 +30,12 @@ import { supabase, TopicVideo, Assignment, AssignmentQuestion, AssignmentSubmiss
 import MathText from '../components/MathText';
 import PYQTab from '../components/PYQTab';
 import DoubtsTab from '../components/DoubtsTab';
+import { openAskAI } from '../services/askAIStore';
 
 const TABS = [
   { id: 'videos', label: 'Classes', icon: 'play-circle-outline' },
   { id: 'ai', label: 'AI', icon: 'sparkles-outline' },
+  { id: 'ai-teacher', label: 'AI Teacher', icon: 'school-outline' },
   { id: 'questions', label: 'Questions', icon: 'list-outline' },
   { id: 'assignments', label: 'Assignments', icon: 'document-text-outline' },
   { id: 'pyqs', label: "PYQ's", icon: 'document-text-outline' },
@@ -2512,6 +2514,11 @@ export default function ChapterContentScreen() {
               key={tab.id}
               style={[styles.tab, activeTab === tab.id && styles.tabActive]}
               onPress={() => {
+                // "AI Teacher" opens the Ask AI screen over this one; "AI" stays the slide-presentation tab.
+                if (tab.id === 'ai-teacher') {
+                  openAskAI({ subjectId, subjectName, topicTitle: chapterTitle });
+                  return;
+                }
                 setActiveTab(tab.id);
                 if (tab.id === 'questions') {
                   setQuestionScreen('test');

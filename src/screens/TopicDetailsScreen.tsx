@@ -140,6 +140,7 @@ type SolutionQuestion = {
 const TABS = [
   { id: 'videos', label: 'Classes', icon: 'play-circle-outline' },
   { id: 'ai', label: 'AI', icon: 'sparkles-outline' },
+  { id: 'ai-teacher', label: 'AI Teacher', icon: 'school-outline' },
   { id: 'notes', label: 'Notes', icon: 'document-text-outline' },
   { id: 'important-notes', label: 'Important Notes', icon: 'bookmark-outline' },
   { id: 'questions', label: 'Questions', icon: 'list-outline' },
@@ -2784,9 +2785,9 @@ export default function TopicDetailsScreen() {
 
   const handleTabSelect = (tabId: string) => {
     setSidebarOpen(false);
-    // The "AI" tab is a button for the Ask AI screen (the one the lecture player has), not a tab of its own. The old
-    // AI tab is still used for finished-presentation sessions and doubt clearing, which set it directly.
-    if (tabId === 'ai') {
+    // "AI Teacher" is a button for the Ask AI screen (the one the lecture player has), not a tab of its own. The "AI"
+    // tab is a normal tab again: it is where a question is answered as a slide presentation.
+    if (tabId === 'ai-teacher') {
       openAskAI({ subjectId: subjectId ?? topic?.subject_id, subjectName, topicTitle: topic?.title ?? topicTitle });
       return;
     }
