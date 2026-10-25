@@ -44,7 +44,7 @@ import { MicStreamer } from '../aiteacher/MicStreamer';
 import { TeacherVoicePlayer } from '../aiteacher/TeacherVoicePlayer';
 import { LessonBoard } from './LessonBoardNative';
 import type { CardActions } from './LessonCardsNative';
-import { VoiceOrb } from './VoiceOrb';
+import { RobotMascot } from './RobotMascot';
 import { SubjectPicker } from './SubjectPickerNative';
 import { ask } from './askTheme';
 
@@ -80,8 +80,6 @@ export interface AskAIAssistantProps {
 
 const SERIF = Platform.select({ ios: 'Georgia', default: 'serif' });
 
-/** The orb's layout box is 2.1x its diameter (room for its glow); we show it clipped to 1.6x. */
-const ORB_BOX_FACTOR = 1.6;
 
 export function AskAIAssistant(props: AskAIAssistantProps) {
   const { onClose, topicTitle, onOpenPlans, onOpenSettings, choices } = props;
@@ -352,7 +350,6 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
   const panelWidth = Math.round(Math.min(420, Math.max(290, width * 0.4)));
   const compact = height < 440;
   const orbBox = compact ? Math.round(Math.min(112, Math.max(84, height * 0.3))) : Math.round(Math.min(160, Math.max(110, height * 0.28)));
-  const orbSize = Math.round(orbBox / ORB_BOX_FACTOR);
   const problem = error || notice;
   const micLive = view.orbMode === 'listening';
   const left = compact ? styles.textLeft : null;
@@ -370,11 +367,11 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.teacher, { width: panelWidth }]}>
         <View style={[styles.talk, compact && styles.talkCompact]}>
-          <View style={[styles.orbWrap, { width: orbBox, height: orbBox, borderRadius: orbBox / 2 }]}>
-            <VoiceOrb
+          <View style={[styles.orbWrap, { width: orbBox, height: orbBox }]}>
+            <RobotMascot
               mode={view.orbMode}
               getLevel={getLevel}
-              size={orbSize}
+              size={orbBox}
               onPress={view.orbAction === 'none' ? undefined : onOrbPress}
               accessibilityLabel={view.orbLabel}
             />
