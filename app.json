@@ -105,10 +105,10 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "owner": "prashantuser5",
+    "owner": "prashantuser6",
     "extra": {
       "eas": {
-        "projectId": "17bd763f-ccd4-4c9d-8717-7e63567e08fe"
+        "projectId": "8aef5ff1-b728-497e-8839-3b295af396dc"
       }
     }
   }
