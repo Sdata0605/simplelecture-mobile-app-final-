@@ -64,7 +64,7 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#2BBD6E",
-          "sounds": []
+          "sounds": ["./assets/sounds/study_call_ring.wav"]
         }
       ],
       "./plugins/withFirebaseMessagingFix",

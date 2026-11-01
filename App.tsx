@@ -40,14 +40,23 @@ import { GlobalAIButton } from './src/components/aiteacher/GlobalAIButton';
 import { setupAndScheduleNotifications, scheduleStudyReminders } from './src/services/scheduledNotifications';
 import AppNavigator, { navigationRef } from './src/navigation/AppNavigator';
 import { AskAIHost } from './src/components/askAssistant/AskAIHost';
+import CallReminderNotificationBridge from './src/components/callReminder/CallReminderNotificationBridge';
+import { isCallRemindersEnabled } from './src/constants/featureFlags';
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
+  handleNotification: async (notification) => {
+    // A call reminder in the foreground shows the in-app ringing screen, not a banner or sound.
+    const type = (notification.request.content.data as Record<string, unknown> | undefined)?.type;
+    if (type === 'call_reminder' && isCallRemindersEnabled()) {
+      return { shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: true };
+    }
+    return {
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    };
+  },
 });
 
 const FONT_WEIGHT_MAP: Record<string, string> = {
@@ -166,6 +175,8 @@ function NotificationTapHandler() {
   }, []);
 
   const handleNotificationNavigation = (data: Record<string, any>) => {
+    // Call reminders are routed by CallReminderNotificationBridge (Answer / Decline / tap).
+    if (data?.type === 'call_reminder' && isCallRemindersEnabled()) return;
     const nav = navigationRef.current;
     if (!nav?.isReady()) return;
 
@@ -229,6 +240,7 @@ export default function App() {
             <StatusBar style="light" />
             <NotificationScheduler />
             <NotificationTapHandler />
+            <CallReminderNotificationBridge />
             <SidebarProvider>
               <AppNavigator />
               <GlobalAIButton />

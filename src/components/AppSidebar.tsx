@@ -16,11 +16,12 @@ import { useSidebar } from '../context/SidebarContext';
 import { navigationRef } from '../navigation/AppNavigator';
 import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
 import { openAskAI } from '../services/askAIStore';
+import { isCallRemindersEnabled } from '../constants/featureFlags';
 
 const { width } = Dimensions.get('window');
 const PANEL_WIDTH = Math.min(width * 0.78, 320);
 
-type MenuItem = { icon: string; label: string; route: string };
+type MenuItem = { icon: string; label: string; route: string; flag?: 'callReminders' };
 
 const MENU_ITEMS: MenuItem[] = [
   { icon: 'home', label: 'Home', route: 'Home' },
@@ -32,6 +33,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: 'videocam', label: 'Live Classes', route: 'LiveClasses' },
   { icon: 'trophy', label: 'My Rewards', route: 'MyRewards' },
   { icon: 'calendar', label: 'Timetable', route: 'StudyTimetable' },
+  { icon: 'call', label: 'Call reminders', route: 'CallReminders', flag: 'callReminders' },
   { icon: 'clipboard', label: 'My Test', route: 'MyTests' },
   { icon: 'chatbubbles', label: 'Forum', route: 'Forum' },
   { icon: 'newspaper', label: 'Blog', route: 'Blog' },
@@ -165,7 +167,11 @@ export default function AppSidebar() {
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.sidebarMenu}>
-              {MENU_ITEMS.filter((item) => item.route !== 'AITeacher' || hasActivePlan).map((item) => {
+              {MENU_ITEMS.filter((item) => {
+                if (item.route === 'AITeacher' && !hasActivePlan) return false;
+                if (item.flag === 'callReminders' && !isCallRemindersEnabled()) return false;
+                return true;
+              }).map((item) => {
                 const active = currentRoute === item.route;
                 return (
                   <TouchableOpacity

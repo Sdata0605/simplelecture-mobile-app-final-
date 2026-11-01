@@ -3,6 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { SUPABASE_URL as SB_PROXY_URL, SUPABASE_ANON_KEY as SB_ANON_KEY, AUTH_TOKEN_KEY, getValidAccessToken } from './supabase';
+import { isCallRemindersEnabled } from '../constants/featureFlags';
+import { rescheduleAllCallReminders, clearLocalCallAudio } from './callReminders';
 
 const WELCOME_SHOWN_KEY = 'welcome_notification_shown';
 const LOGIN_WELCOME_LAST_KEY = 'login_welcome_last_sent';
@@ -125,6 +127,12 @@ export async function setupAndScheduleNotifications(): Promise<void> {
     // so there is no local blog scheduling here anymore.
     console.log('[Notifications] Step 3/3: Scheduling study reminders...');
     await scheduleStudyReminders();
+    // cancelAllScheduledNotificationsAsync above also removed the call reminders,
+    // so rebuild them from the database (no-op when the flag is off).
+    if (isCallRemindersEnabled()) {
+      console.log('[Notifications] Step 4/4: Rescheduling call reminders...');
+      await rescheduleAllCallReminders();
+    }
     console.log('[Notifications] All notifications scheduled successfully');
 
     const scheduled = await Notifications.getAllScheduledNotificationsAsync();
@@ -386,5 +394,8 @@ export async function scheduleStudyReminders(): Promise<void> {
 
 export async function cancelDailyNotifications(): Promise<void> {
   await Notifications.cancelAllScheduledNotificationsAsync();
+  if (isCallRemindersEnabled()) {
+    await clearLocalCallAudio();
+  }
   console.log('[Notifications] All notifications cancelled');
 }
