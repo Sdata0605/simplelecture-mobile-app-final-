@@ -1,5 +1,6 @@
 // Voice files for Reminders v2. Spec: _scratch/reminders-v2-plan.md D-9, D-10, D.5 and F.2.
-// Local mp3 files live in documentDirectory/reminders-audio/<hash>.mp3.
+// Local voice files live in documentDirectory/reminders-audio/<hash>.<ext>, where ext is
+// 'wav' (Gemini, current) or 'mp3' (Sarvam, legacy). The server says which one it sent.
 
 import * as FileSystem from 'expo-file-system/legacy';
 import { SUPABASE_URL } from '../supabase';
@@ -13,6 +14,10 @@ const AUDIO_FN_URL = `${SUPABASE_URL}/functions/v1/reminder-call-audio`;
 const AUDIO_DIR_NAME = 'reminders-audio/';
 export const AUDIO_TIMEOUT_MS = 30000;
 export const RESOLVE_TIMEOUT_MS = 6000;
+
+export type AudioFormat = 'wav' | 'mp3';
+// Looked up in this order when a reminder's file is read from disk.
+const FORMATS: ReadonlyArray<AudioFormat> = ['wav', 'mp3'];
 
 export interface GenerateAudioParams {
   text: string;
@@ -29,7 +34,11 @@ export interface GenerateAudioResult {
   cached: boolean;
   voice: string;
   language: string;
-  model: 'bulbul:v3';
+  /** 'gemini-3.8-flash-tts' (new) or 'bulbul:v3' (legacy Sarvam). */
+  model: string;
+  engine?: 'gemini' | 'sarvam';
+  /** Missing from older server responses; those files were always mp3. */
+  format?: AudioFormat;
 }
 
 export class ReminderAudioError extends Error {
@@ -52,7 +61,7 @@ export interface LocalAudio {
 
 /**
  * What the call or message screen should play (D-9 fallback ladder).
- * 'file' plays the local mp3. 'device' speaks the script with the phone's voice.
+ * 'file' plays the local voice file. 'device' speaks the script with the phone's voice.
  * 'text' shows the script in large type.
  */
 export type VoiceSource =
@@ -77,10 +86,14 @@ function audioDir(): string | null {
 // Anything else (path segments, dots, slashes) is refused instead of written to disk.
 const HASH_PATTERN = /^[a-f0-9]{16,128}$/i;
 
-function localPath(hash: string): string | null {
+function localPath(hash: string, format: AudioFormat): string | null {
   if (!HASH_PATTERN.test(hash)) return null;
   const dir = audioDir();
-  return dir ? `${dir}${hash}.mp3` : null;
+  return dir ? `${dir}${hash}.${format}` : null;
+}
+
+function formatOf(res: Pick<GenerateAudioResult, 'format'>): AudioFormat {
+  return res.format === 'wav' ? 'wav' : 'mp3';
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -91,9 +104,13 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-async function downloadToLocal(hash: string, signedUrl: string): Promise<string | null> {
+async function downloadToLocal(
+  hash: string,
+  format: AudioFormat,
+  signedUrl: string,
+): Promise<string | null> {
   const dir = audioDir();
-  const local = localPath(hash);
+  const local = localPath(hash, format);
   if (!dir || !local) return null;
   try {
     if (!(await fileExists(dir))) {
@@ -145,6 +162,23 @@ export async function generateAudio(
 }
 
 /**
+ * Local voice file already on disk for this reminder (WAV preferred, then MP3).
+ * Disk only: never touches the network, so it is safe to call while the phone rings.
+ */
+export async function findLocalAudio(
+  r: Pick<Reminder, 'audio_hash' | 'audio_path'>,
+): Promise<LocalAudio | null> {
+  if (!FEATURES.reminders || !r.audio_hash) return null;
+  for (const format of FORMATS) {
+    const local = localPath(r.audio_hash, format);
+    if (local && (await fileExists(local))) {
+      return { uri: local, hash: r.audio_hash, audioPath: r.audio_path };
+    }
+  }
+  return null;
+}
+
+/**
  * Local voice file for a reminder, downloading it when needed. Returns null when the
  * reminder has no voice to make or it cannot be fetched. Never throws.
  */
@@ -154,12 +188,9 @@ export async function ensureLocalAudio(
 ): Promise<LocalAudio | null> {
   if (!FEATURES.reminders) return null;
 
-  if (r.audio_hash) {
-    const local = localPath(r.audio_hash);
-    if (local && (await fileExists(local))) {
-      return { uri: local, hash: r.audio_hash, audioPath: r.audio_path };
-    }
-  }
+  const onDisk = await findLocalAudio(r);
+  if (onDisk) return onDisk;
+
   const script = spokenScript(r.message_text, r.language);
   if (!script) return null;
   try {
@@ -168,7 +199,7 @@ export async function ensureLocalAudio(
       { text: script, voice: r.voice, language: r.language, reminderId: r.id },
       opts.timeoutMs ?? AUDIO_TIMEOUT_MS,
     );
-    const uri = await downloadToLocal(res.hash, res.signedUrl);
+    const uri = await downloadToLocal(res.hash, formatOf(res), res.signedUrl);
     if (!uri) return null;
     return { uri, hash: res.hash, audioPath: res.audioPath };
   } catch (e) {
@@ -178,9 +209,33 @@ export async function ensureLocalAudio(
 }
 
 /**
- * Makes voice files for scheduled call reminders, one at a time (Sarvam is slow and
- * the edge function quota is 20 new generations a day). Skips reminders whose voice
- * already failed, so a quota error is not retried on every sync.
+ * A legacy mp3 (Sarvam) file is replaced by the Gemini wav when the server now makes one.
+ * The mp3 is kept until the wav is on disk; any failure keeps the mp3.
+ */
+async function upgradeLegacyAudio(
+  r: Pick<Reminder, 'message_text' | 'language' | 'voice' | 'id'>,
+  current: LocalAudio,
+): Promise<LocalAudio> {
+  if (!current.uri.endsWith('.mp3')) return current;
+  const script = spokenScript(r.message_text, r.language);
+  if (!script) return current;
+  try {
+    const res = await generateAudio(
+      { text: script, voice: r.voice, language: r.language, reminderId: r.id },
+      AUDIO_TIMEOUT_MS,
+    );
+    if (formatOf(res) !== 'wav') return current;
+    const uri = await downloadToLocal(res.hash, 'wav', res.signedUrl);
+    return uri ? { uri, hash: res.hash, audioPath: res.audioPath } : current;
+  } catch {
+    return current;
+  }
+}
+
+/**
+ * Makes voice files for scheduled call reminders, one at a time (the edge function
+ * quota is 20 new generations a day). Skips reminders whose voice already failed, so a
+ * quota error is not retried on every sync. Legacy mp3 files are upgraded to wav.
  */
 export async function prefetchVoices(
   reminders: ReadonlyArray<Reminder>,
@@ -189,7 +244,10 @@ export async function prefetchVoices(
   for (const r of reminders) {
     if (r.kind !== 'call' || r.status !== 'scheduled') continue;
     if (r.audio_status === 'failed') continue;
-    const local = await ensureLocalAudio(r, { timeoutMs: AUDIO_TIMEOUT_MS });
+    const onDisk = await findLocalAudio(r);
+    const local = onDisk
+      ? await upgradeLegacyAudio(r, onDisk)
+      : await ensureLocalAudio(r, { timeoutMs: AUDIO_TIMEOUT_MS });
     results.push(
       local
         ? { id: r.id, audio: 'ready', hash: local.hash, audioPath: local.audioPath }
@@ -201,6 +259,7 @@ export async function prefetchVoices(
 
 /**
  * Deletes local voice files that no reminder refers to. The file being played is kept.
+ * Strips either extension (.wav or .mp3) to get the hash.
  */
 export async function gcAudio(keepHashes: Iterable<string>, playingHash?: string | null): Promise<void> {
   const dir = audioDir();
@@ -214,7 +273,7 @@ export async function gcAudio(keepHashes: Iterable<string>, playingHash?: string
     return;
   }
   for (const name of names) {
-    const hash = name.replace(/\.mp3$/, '');
+    const hash = name.replace(/\.(wav|mp3)$/, '');
     if (keep.has(hash)) continue;
     await FileSystem.deleteAsync(`${dir}${name}`, { idempotent: true }).catch(() => {});
   }
@@ -252,7 +311,7 @@ export async function previewVoice(
   const script = spokenScript(text, language);
   if (!script) throw new ReminderAudioError('empty', 400, 'Nothing to preview');
   const res = await generateAudio({ text: script, voice, language, preview: true });
-  const uri = await downloadToLocal(res.hash, res.signedUrl);
+  const uri = await downloadToLocal(res.hash, formatOf(res), res.signedUrl);
   if (!uri) throw new ReminderAudioError('download', 0, 'Could not download the preview');
   return uri;
 }

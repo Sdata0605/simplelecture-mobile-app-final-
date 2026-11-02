@@ -40,7 +40,7 @@ import type { Reminder } from '../types/reminder';
 type Props = NativeStackScreenProps<RootStackParamList, 'ReminderCall'>;
 
 type CallMode = 'call' | 'message';
-// Which voice path is active. 'file' = pre-generated mp3, 'device' = phone voice, 'text' = text only.
+// Which voice path is active. 'file' = pre-generated voice file (wav or legacy mp3), 'device' = phone voice, 'text' = text only.
 type VoicePath = 'file' | 'device' | 'text';
 
 // D-9: the edge-function fetch is bounded in time so the call never hangs on "Connecting".
@@ -122,8 +122,14 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
   const pendingPlayRef = useRef(false);
   const mountedRef = useRef(true);
 
-  const audio = useReminderCallAudio(fileUri);
-  const { play: playFile, stop: stopFile, positionMs, state: fileState } = audio;
+  const audio = useReminderCallAudio(fileUri, reminderId);
+  const {
+    play: playFile,
+    stop: stopFile,
+    positionMs,
+    state: fileState,
+    preloaded: filePreloaded,
+  } = audio;
   const {
     speak: speakSpoken,
     stop: stopSpoken,
@@ -170,6 +176,20 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
   const filePlaying = path === 'file' && fileState === 'playing';
   const deviceSpeaking = path === 'device' && spokenState === 'speaking';
   const playing = filePlaying || deviceSpeaking;
+
+  // Timing for the answer-to-sound budget: logged once each time playback starts.
+  const mountedAtRef = useRef(Date.now());
+  const playLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!playing) {
+      playLoggedRef.current = false;
+      return;
+    }
+    if (playLoggedRef.current) return;
+    playLoggedRef.current = true;
+    const via = path === 'device' ? 'device' : filePreloaded ? 'preloaded' : 'file';
+    console.log(`[ReminderVoice] path=${via} ms=${Date.now() - mountedAtRef.current}`);
+  }, [playing, path, filePreloaded]);
   const finished =
     path === 'text' ||
     (path === 'file' && fileState === 'ended') ||
@@ -259,7 +279,7 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
     requestPlay();
   }, [autoplay, mode, reminder, path, requestPlay]);
 
-  // Fallback 1: the mp3 failed to play, so use the phone's voice.
+  // Fallback 1: the voice file failed to play, so use the phone's voice.
   useEffect(() => {
     if (path !== 'file' || fileState !== 'error' || !reminder) return;
     let active = true;

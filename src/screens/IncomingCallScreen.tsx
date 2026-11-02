@@ -25,9 +25,14 @@ import { useFocusEffect } from '@react-navigation/native';
 import { colors, spacing, fontSize, fontFamily, borderRadius } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import RingingAvatar from '../components/callReminder/RingingAvatar';
-import { useRingtone } from '../hooks/useReminderCallAudio';
+import {
+  primeReminderVoice,
+  releaseReminderVoice,
+  useRingtone,
+} from '../hooks/useReminderCallAudio';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { getReminderLocal, markOutcome } from '../services/reminders';
+import { findLocalAudio } from '../services/reminders/audio';
 import type { Reminder } from '../types/reminder';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'IncomingCall'>;
@@ -42,6 +47,8 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
   const [ringing, setRinging] = useState(true);
   const [reminder, setReminder] = useState<Reminder | null>(null);
   const handledRef = useRef(false);
+  // Answer keeps the primed voice for ReminderCallScreen, so the unmount below must not release it.
+  const answeredRef = useRef(false);
   const mountedRef = useRef(true);
 
   useRingtone(ringing);
@@ -50,8 +57,24 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (!answeredRef.current) releaseReminderVoice();
     };
   }, []);
+
+  // While ringing, load the saved voice file paused (disk only, no network) so Answer plays at once.
+  useEffect(() => {
+    if (!reminder) return;
+    let active = true;
+    findLocalAudio(reminder)
+      .then((local) => {
+        if (!active || !local || answeredRef.current || handledRef.current) return;
+        void primeReminderVoice(reminder.id, local.uri);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [reminder]);
 
   // Re-checks the reminder. If it was deleted while ringing, stop ringing and leave the screen.
   const checkStillExists = useCallback(() => {
@@ -139,9 +162,15 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
     if (mountedRef.current) setRinging(false);
 
     if (kind === 'decline') {
+      releaseReminderVoice();
       markOutcome(reminderId, 'declined').catch(() => {});
       navigation.goBack();
       return;
+    }
+    if (kind === 'answer') {
+      answeredRef.current = true;
+    } else {
+      releaseReminderVoice();
     }
     const outcome = kind === 'answer' ? 'answered' : 'missed';
     markOutcome(reminderId, outcome).catch(() => {});

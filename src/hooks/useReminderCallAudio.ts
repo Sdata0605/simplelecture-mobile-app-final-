@@ -1,14 +1,17 @@
 /**
  * Audio helpers for the Reminders call and message experience.
  *
- * - useReminderCallAudio(localUri): plays the pre-generated mp3 for a reminder
- *   (one-way audio, loudspeaker, works in iOS silent mode).
+ * - primeReminderVoice / takeReminderVoice: load a reminder's local voice file
+ *   (paused) while the phone rings, so Answer only has to press play.
+ * - useReminderCallAudio(localUri, reminderId): plays the pre-generated voice file
+ *   (wav from Gemini, or legacy mp3). Uses the primed sound when there is one.
+ *   One-way audio, loudspeaker, works in iOS silent mode.
  * - useSpokenFallback(): speaks the spoken script with the phone's own voice
- *   (expo-speech). Used when the mp3 is missing or fails to play.
+ *   (expo-speech). Used when the file is missing or fails to play.
  * - useRingtone(active): loops the bundled ring tone and vibrates while an
  *   incoming call is ringing.
  *
- * Spec: _scratch/reminders-v2-plan.md E.9 (fallback ladder) and D-9.
+ * Spec: _scratch/gemini-voice-plan.md D.5, F and G; _scratch/reminders-v2-plan.md E.9 and D-9.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Audio, AVPlaybackStatus } from 'expo-av';
@@ -25,20 +28,89 @@ export interface ReminderCallAudioResult {
   stop: () => void;
   positionMs: number;
   durationMs: number;
+  /** True when the last play used a sound loaded during ringing. */
+  preloaded: boolean;
 }
 
 const RING_VIBRATION_PATTERN = [0, 1000, 800];
+// A primed sound nobody answers is unloaded after this long.
+const PRIME_TTL_MS = 60000;
 
-export function useReminderCallAudio(localUri: string | null): ReminderCallAudioResult {
+interface PrimedVoice {
+  reminderId: string;
+  uri: string;
+  sound: Audio.Sound;
+  expiry: ReturnType<typeof setTimeout>;
+}
+
+// One paused sound at a time (the call that is ringing).
+let primed: PrimedVoice | null = null;
+// Bumped by every prime and release so a slow load that lost the race is dropped.
+let primeSeq = 0;
+
+/** Drops the primed sound, if any. Safe to call at any time. */
+export function releaseReminderVoice(): void {
+  primeSeq += 1;
+  const current = primed;
+  primed = null;
+  if (!current) return;
+  clearTimeout(current.expiry);
+  current.sound.setOnPlaybackStatusUpdate(null);
+  current.sound.unloadAsync().catch(() => {});
+}
+
+/**
+ * Loads a reminder's local file paused, ready to play. Disk only (the caller passes a
+ * local uri). Errors are swallowed: Answer then uses the normal load path.
+ */
+export async function primeReminderVoice(reminderId: string, uri: string): Promise<void> {
+  if (primed && primed.reminderId === reminderId && primed.uri === uri) return;
+  releaseReminderVoice();
+  const seq = primeSeq;
+  try {
+    const { sound } = await Audio.Sound.createAsync(
+      { uri },
+      { shouldPlay: false, progressUpdateIntervalMillis: 250 }
+    );
+    if (seq !== primeSeq) {
+      sound.unloadAsync().catch(() => {});
+      return;
+    }
+    const expiry = setTimeout(() => {
+      if (primed && primed.sound === sound) releaseReminderVoice();
+    }, PRIME_TTL_MS);
+    primed = { reminderId, uri, sound, expiry };
+  } catch (e) {
+    console.warn('[ReminderVoice] prime failed', e);
+  }
+}
+
+/** Hands over the primed sound for this reminder and uri. The caller owns it afterwards. */
+function takeReminderVoice(reminderId: string, uri: string): Audio.Sound | null {
+  if (!primed || primed.reminderId !== reminderId || primed.uri !== uri) return null;
+  const { sound, expiry } = primed;
+  clearTimeout(expiry);
+  primed = null;
+  primeSeq += 1;
+  return sound;
+}
+
+export function useReminderCallAudio(
+  localUri: string | null,
+  reminderId: string | null = null,
+): ReminderCallAudioResult {
   const [state, setState] = useState<ReminderCallAudioState>('idle');
   const [positionMs, setPositionMs] = useState(0);
   const [durationMs, setDurationMs] = useState(0);
+  const [preloaded, setPreloaded] = useState(false);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   // Bumped on every play/stop so late async callbacks from an old run are ignored.
   const generationRef = useRef(0);
   const uriRef = useRef(localUri);
   uriRef.current = localUri;
+  const idRef = useRef(reminderId);
+  idRef.current = reminderId;
   const mountedRef = useRef(true);
 
   const teardown = useCallback(() => {
@@ -72,10 +144,12 @@ export function useReminderCallAudio(localUri: string | null): ReminderCallAudio
     }
 
     const myGen = generationRef.current;
+    const primedId = idRef.current;
     setState('loading');
     setPositionMs(0);
 
     (async () => {
+      let pre: Audio.Sound | null = null;
       try {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
@@ -86,10 +160,24 @@ export function useReminderCallAudio(localUri: string | null): ReminderCallAudio
         });
         if (generationRef.current !== myGen || !mountedRef.current) return;
 
-        const { sound } = await Audio.Sound.createAsync(
-          { uri },
-          { shouldPlay: true, progressUpdateIntervalMillis: 250 }
-        );
+        // Use the sound loaded during ringing when it matches; otherwise load now.
+        pre = primedId ? takeReminderVoice(primedId, uri) : null;
+        let sound: Audio.Sound;
+        if (pre) {
+          if (generationRef.current !== myGen || !mountedRef.current) {
+            pre.unloadAsync().catch(() => {});
+            return;
+          }
+          await pre.playAsync();
+          sound = pre;
+        } else {
+          const created = await Audio.Sound.createAsync(
+            { uri },
+            { shouldPlay: true, progressUpdateIntervalMillis: 250 }
+          );
+          sound = created.sound;
+        }
+        if (mountedRef.current) setPreloaded(!!pre);
         if (generationRef.current !== myGen || !mountedRef.current) {
           sound.unloadAsync().catch(() => {});
           return;
@@ -113,6 +201,7 @@ export function useReminderCallAudio(localUri: string | null): ReminderCallAudio
         });
         setState('playing');
       } catch (e) {
+        if (pre) pre.unloadAsync().catch(() => {});
         console.warn('[ReminderCallAudio] playback failed', e);
         if (generationRef.current === myGen && mountedRef.current) {
           setState('error');
@@ -130,7 +219,7 @@ export function useReminderCallAudio(localUri: string | null): ReminderCallAudio
     };
   }, [teardown]);
 
-  return { state, play, stop, positionMs, durationMs };
+  return { state, play, stop, positionMs, durationMs, preloaded };
 }
 
 export interface VoiceCandidate {
