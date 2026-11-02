@@ -41,6 +41,9 @@ export interface GenerateAudioResult {
   format?: AudioFormat;
 }
 
+/** Time (ms) until which the server's daily voice quota is known to be used up. */
+let quotaBlockedUntil = 0;
+
 export class ReminderAudioError extends Error {
   code: string;
   status: number;
@@ -203,6 +206,14 @@ export async function ensureLocalAudio(
     if (!uri) return null;
     return { uri, hash: res.hash, audioPath: res.audioPath };
   } catch (e) {
+    // Once the daily voice quota is used up, stop asking until the next local day.
+    if (e instanceof ReminderAudioError && e.code === 'daily_limit') {
+      const midnight = new Date();
+      midnight.setHours(24, 0, 0, 0);
+      quotaBlockedUntil = midnight.getTime();
+      console.warn('[Reminders] daily voice quota reached; using phone voice until tomorrow');
+      return null;
+    }
     console.warn('[Reminders] ensureLocalAudio failed', e);
     return null;
   }
@@ -245,6 +256,10 @@ export async function prefetchVoices(
     if (r.kind !== 'call' || r.status !== 'scheduled') continue;
     if (r.audio_status === 'failed') continue;
     const onDisk = await findLocalAudio(r);
+    if (!onDisk && Date.now() < quotaBlockedUntil) {
+      results.push({ id: r.id, audio: 'failed', hash: null, audioPath: null });
+      continue;
+    }
     const local = onDisk
       ? await upgradeLegacyAudio(r, onDisk)
       : await ensureLocalAudio(r, { timeoutMs: AUDIO_TIMEOUT_MS });
