@@ -10,7 +10,7 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class ExactAlarmModule : Module() {
-  override fun definition(): ModuleDefinition = ModuleDefinition {
+  override fun definition() = ModuleDefinition {
     Name("ExactAlarm")
 
     Function("canScheduleExactAlarms") {
