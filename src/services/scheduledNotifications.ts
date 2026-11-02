@@ -325,10 +325,14 @@ async function fetchUpcomingStudySessions(): Promise<StudyReminderSession[]> {
     }
     const now = new Date().toISOString();
     const windowEnd = new Date(Date.now() + STUDY_REMINDER_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    // Sessions with a timetable reminder channel are reminded by the new channel, not this legacy alarm.
+    // Only when the flag is on: the reminder_channel column may not exist on older servers.
+    const channelFilter = FEATURES.timetableReminders ? `&reminder_channel=is.null` : '';
     const url =
       `${SB_PROXY_URL}/rest/v1/study_timetable_sessions` +
       `?select=id,title,scheduled_at,status` +
       `&status=eq.pending&scheduled_at=gte.${now}&scheduled_at=lte.${windowEnd}` +
+      channelFilter +
       `&order=scheduled_at.asc`;
     const res = await fetch(url, {
       method: 'GET',

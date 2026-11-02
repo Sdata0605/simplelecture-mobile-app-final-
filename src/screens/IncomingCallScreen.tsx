@@ -33,6 +33,7 @@ import {
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { getReminderLocal, markOutcome } from '../services/reminders';
 import { findLocalAudio } from '../services/reminders/audio';
+import { planOpenClass } from '../services/reminders/openClass';
 import type { Reminder } from '../types/reminder';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'IncomingCall'>;
@@ -183,6 +184,21 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
     navigation.replace('ReminderCall', callParams);
   };
 
+  // "Open class": stop ringing, record the call as answered, and go to the reminder's Classes tab.
+  const openClass = () => {
+    if (handledRef.current) return;
+    handledRef.current = true;
+    if (mountedRef.current) setRinging(false);
+    releaseReminderVoice();
+    markOutcome(reminderId, 'answered').catch(() => {});
+    const plan = planOpenClass(reminder?.target, reminderId);
+    if (plan.intent.name === 'StudyTimetable') {
+      navigation.replace('StudyTimetable');
+    } else {
+      navigation.replace('TopicDetails', plan.intent.params as RootStackParamList['TopicDetails']);
+    }
+  };
+
   // Auto-missed after 30 s of ringing.
   useEffect(() => {
     if (!ringing) return;
@@ -250,6 +266,20 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
               </View>
             </Animated.View>
             <Text style={styles.actionLabel}>Answer</Text>
+          </View>
+
+          <View style={styles.actionCol}>
+            <TouchableOpacity
+              onPress={openClass}
+              disabled={!reminder}
+              style={[styles.circle, styles.classCircle, !reminder && styles.disabled]}
+              accessibilityRole="button"
+              accessibilityLabel="Open class"
+              activeOpacity={0.8}
+            >
+              <Ionicons name="book-outline" size={30} color={colors.white} />
+            </TouchableOpacity>
+            <Text style={styles.actionLabel}>Open class</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -328,6 +358,12 @@ const styles = StyleSheet.create({
   },
   declineIcon: {
     transform: [{ rotate: '135deg' }],
+  },
+  classCircle: {
+    backgroundColor: colors.primary,
+  },
+  disabled: {
+    opacity: 0.4,
   },
   actionLabel: {
     fontFamily: fontFamily.regular,

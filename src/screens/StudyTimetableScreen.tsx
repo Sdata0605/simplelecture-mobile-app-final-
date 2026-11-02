@@ -41,8 +41,31 @@ import {
 } from '../hooks/useStudyTimetable';
 import { scheduleStudyReminders } from '../services/scheduledNotifications';
 import AutoChapterTestBanner from '../components/AutoChapterTestBanner';
+import ReminderChannelPicker from '../components/timetable/ReminderChannelPicker';
+import { KIND_STYLE, EMAIL_STYLE } from '../components/reminders/palette';
+import { FEATURES } from '../constants/featureFlags';
+import type { ReminderChannel } from '../types/reminder';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList>;
+
+// ─── reminder channel ────────────────────────────────────────────────────────
+const CHANNEL_CHIP_LABEL: Record<ReminderChannel, string> = {
+  call: 'Call', message: 'Text', notification: 'Notification', email: 'Email',
+};
+
+function channelChipStyle(channel: ReminderChannel | null | undefined) {
+  if (!channel) return { fg: colors.textMuted, bg: '#F3F4F6', icon: 'notifications-off-outline', label: 'Off' };
+  const k =
+    channel === 'call' ? KIND_STYLE.call :
+    channel === 'message' ? KIND_STYLE.message :
+    channel === 'notification' ? KIND_STYLE.notification : EMAIL_STYLE;
+  return { fg: k.fg, bg: k.bg, icon: k.icon, label: CHANNEL_CHIP_LABEL[channel] };
+}
+
+/** Only pending study sessions take a reminder channel. Flag off: nothing is shown. */
+function canSetChannel(s: StudyTimetableSession): boolean {
+  return FEATURES.timetableReminders && s.status === 'pending' && s.session_type !== 'test';
+}
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const PLAN_CARD_WIDTH = SCREEN_WIDTH * 0.72;
@@ -667,12 +690,14 @@ function DayDetailModal({
   const [editTitle, setEditTitle] = useState('');
   const [editDuration, setEditDuration] = useState('');
   const [editNotes, setEditNotes] = useState('');
+  const [editChannel, setEditChannel] = useState<ReminderChannel | null>(null);
 
   function openEdit(s: StudyTimetableSession) {
     setEditingSession(s);
     setEditTitle(s.title);
     setEditDuration(String(s.duration_minutes));
     setEditNotes(s.notes ?? '');
+    setEditChannel(s.reminder_channel ?? null);
   }
 
   async function saveEdit() {
@@ -683,6 +708,7 @@ function DayDetailModal({
         title: editTitle.trim() || editingSession.title,
         duration_minutes: parseInt(editDuration) || editingSession.duration_minutes,
         notes: editNotes.trim() || null,
+        ...(canSetChannel(editingSession) ? { reminder_channel: editChannel } : {}),
       });
       setEditingSession(null);
       onSessionUpdate();
@@ -726,11 +752,18 @@ function DayDetailModal({
 
           {/* Inline edit form */}
           {editingSession && (
+            <ScrollView style={styles.editFormScroll} keyboardShouldPersistTaps="handled">
             <View style={styles.editForm}>
               <Text style={styles.editFormTitle}>Edit Session</Text>
               <TextInput style={styles.input} value={editTitle} onChangeText={setEditTitle} placeholder="Title" placeholderTextColor={colors.textMuted} />
               <TextInput style={styles.input} value={editDuration} onChangeText={setEditDuration} placeholder="Duration (min)" keyboardType="numeric" placeholderTextColor={colors.textMuted} />
               <TextInput style={[styles.input, { height: 60 }]} value={editNotes} onChangeText={setEditNotes} placeholder="Notes (optional)" multiline placeholderTextColor={colors.textMuted} />
+              {canSetChannel(editingSession) && (
+                <>
+                  <Text style={styles.editChannelLabel}>Remind me by</Text>
+                  <ReminderChannelPicker value={editChannel} onChange={setEditChannel} disabled={loading} />
+                </>
+              )}
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TouchableOpacity style={[styles.editSaveBtn, { flex: 1 }]} onPress={saveEdit} disabled={loading}>
                   {loading ? <ActivityIndicator size="small" color={colors.white} /> : <Text style={styles.editSaveBtnText}>Save</Text>}
@@ -740,6 +773,7 @@ function DayDetailModal({
                 </TouchableOpacity>
               </View>
             </View>
+            </ScrollView>
           )}
 
           <ScrollView showsVerticalScrollIndicator={false}>
@@ -766,6 +800,21 @@ function DayDetailModal({
                         <Text style={[styles.sessionMeta, isSkipped && styles.skippedText]}>
                           {formatTime(s.scheduled_at)} · {s.duration_minutes} min
                         </Text>
+                        {canSetChannel(s) && (() => {
+                          const ch = channelChipStyle(s.reminder_channel);
+                          return (
+                            <TouchableOpacity
+                              style={[styles.channelChip, { backgroundColor: ch.bg }]}
+                              onPress={() => openEdit(s)}
+                              disabled={loading}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Reminder: ${ch.label}. Change`}
+                            >
+                              <Ionicons name={ch.icon as keyof typeof Ionicons.glyphMap} size={12} color={ch.fg} />
+                              <Text style={[styles.channelChipText, { color: ch.fg }]}>{ch.label}</Text>
+                            </TouchableOpacity>
+                          );
+                        })()}
                         {s.notes && <Text style={styles.sessionNotes}>{s.notes}</Text>}
                         <View style={[styles.statusBadge, { backgroundColor: statusColor + '22' }]}>
                           <Text style={[styles.statusBadgeText, { color: statusColor }]}>
@@ -2148,6 +2197,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm, gap: 6, borderWidth: 1, borderColor: '#BAE6FD',
   },
   editFormTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.semiBold, color: '#0369A1', marginBottom: 4 },
+  editFormScroll: { flexGrow: 0, maxHeight: 460, marginBottom: spacing.sm },
+  editChannelLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.semiBold, color: colors.text, marginTop: 4 },
+  channelChip: {
+    alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4,
+    height: 24, paddingHorizontal: 8, borderRadius: 12, marginTop: 2,
+  },
+  channelChipText: { fontSize: fontSize.xs, fontFamily: fontFamily.medium },
   editSaveBtn: {
     backgroundColor: colors.primary, borderRadius: borderRadius.sm, padding: 10, alignItems: 'center',
   },

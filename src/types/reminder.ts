@@ -22,7 +22,25 @@ export interface Reminder {
   audio_path: string | null; audio_hash: string | null; audio_status: AudioStatus;
   status: ReminderStatus; last_fired_at: string | null;
   created_at: string; updated_at: string;
+  // Timetable fields (additive and optional: absent on user rows and older servers).
+  source?: 'user' | 'timetable';
+  session_id?: string | null;
+  target?: ReminderTarget | null;   // where "Open class" goes
+  device_ready_at?: string | null;
+  device_audio_hash?: string | null;
 }
+
+/** Where a timetable reminder leads: the Classes (videos) tab of this topic, chapter or subject. */
+export interface ReminderTarget {
+  courseId: string | null;
+  subjectId: string | null;
+  chapterId: string | null;
+  topicId: string | null;
+  topicTitle?: string | null;
+}
+
+/** Channel chosen per study session in the timetable. No value on the session (null) means no reminder. */
+export type ReminderChannel = 'call' | 'message' | 'notification' | 'email';
 
 export interface ReminderInput {
   id?: string;                 // present when editing
@@ -64,4 +82,6 @@ export const RING_SOUND_FILE = 'reminder_ring_27s.wav';
 
 export interface ReminderNotificationData {
   type: 'reminder'; v: 2; reminderId: string; kind: ReminderKind; fp: string;
+  src?: 'tt';              // study-timetable reminder
+  t?: ReminderTarget;      // where a tap goes (timetable reminders only)
 }

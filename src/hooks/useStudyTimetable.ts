@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, AUTH_TOKEN_KEY, getValidAccessToken } from '../services/supabase';
+import type { ReminderChannel } from '../types/reminder';
 
 export async function authHeaders(): Promise<Record<string, string>> {
   const token = await getValidAccessToken();
@@ -67,6 +68,9 @@ export interface StudyTimetableSession {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  session_type?: 'study' | 'test' | null;
+  // Channel for this session's reminder. null (empty) means no reminder.
+  reminder_channel?: ReminderChannel | null;
 }
 
 export interface SelfTest {
@@ -178,7 +182,7 @@ export function useSelfTests(courseId: string | null) {
 
 export async function patchSession(
   sessionId: string,
-  patch: Partial<Pick<StudyTimetableSession, 'status' | 'notes' | 'title' | 'duration_minutes'>>
+  patch: Partial<Pick<StudyTimetableSession, 'status' | 'notes' | 'title' | 'duration_minutes' | 'reminder_channel'>>
 ): Promise<void> {
   const headers = await authHeaders();
   const res = await fetch(

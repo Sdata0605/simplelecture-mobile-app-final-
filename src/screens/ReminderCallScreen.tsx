@@ -35,6 +35,7 @@ import {
   type VoiceSource,
 } from '../services/reminders';
 import { spokenScript } from '../services/reminders/spokenScript';
+import { planOpenClass } from '../services/reminders/openClass';
 import type { Reminder } from '../types/reminder';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ReminderCall'>;
@@ -335,6 +336,39 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
     }
   };
 
+  // "Open class": stop playback, record the outcome as Done does, and go to the reminder's Classes tab.
+  const onOpenClass = () => {
+    stopFile();
+    stopSpoken();
+    if (reminder) {
+      if (mode === 'message') {
+        markOutcome(reminderId, 'delivered').catch(() => {});
+      } else if (reminder.status !== 'missed') {
+        markOutcome(reminderId, 'answered').catch(() => {});
+      }
+    }
+    const plan = planOpenClass(reminder?.target, reminderId);
+    if (plan.intent.name === 'StudyTimetable') {
+      navigation.replace('StudyTimetable');
+    } else {
+      navigation.replace('TopicDetails', plan.intent.params as RootStackParamList['TopicDetails']);
+    }
+  };
+
+  const openClassButton = (
+    <TouchableOpacity
+      style={styles.openClassBtn}
+      onPress={onOpenClass}
+      disabled={!reminder}
+      accessibilityRole="button"
+      accessibilityLabel="Open class"
+      activeOpacity={0.85}
+    >
+      <Ionicons name="book-outline" size={20} color={colors.white} />
+      <Text style={styles.outlineBtnText}>Open class</Text>
+    </TouchableOpacity>
+  );
+
   const headerLabel =
     mode === 'message'
       ? 'Reminder'
@@ -354,17 +388,20 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
   let bottom: ReactNode = null;
   if (playing) {
     bottom = (
-      <View style={styles.stopCol}>
-        <TouchableOpacity
-          onPress={onStop}
-          style={[styles.circle, { backgroundColor: colors.error }]}
-          accessibilityRole="button"
-          accessibilityLabel="Stop call"
-          activeOpacity={0.85}
-        >
-          <Ionicons name="stop" size={30} color={colors.white} />
-        </TouchableOpacity>
-        <Text style={styles.actionLabel}>Stop</Text>
+      <View style={styles.playingRow}>
+        <View style={styles.stopCol}>
+          <TouchableOpacity
+            onPress={onStop}
+            style={[styles.circle, { backgroundColor: colors.error }]}
+            accessibilityRole="button"
+            accessibilityLabel="Stop call"
+            activeOpacity={0.85}
+          >
+            <Ionicons name="stop" size={30} color={colors.white} />
+          </TouchableOpacity>
+          <Text style={styles.actionLabel}>Stop</Text>
+        </View>
+        <View style={styles.playingOpenClass}>{openClassButton}</View>
       </View>
     );
   } else if (connecting) {
@@ -385,6 +422,7 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
         >
           <Text style={styles.primaryBtnText}>Done</Text>
         </TouchableOpacity>
+        {openClassButton}
         {path !== 'text' && (
           <TouchableOpacity
             style={styles.outlineBtn}
@@ -607,6 +645,26 @@ const styles = StyleSheet.create({
   stopCol: {
     alignItems: 'center',
     gap: spacing.sm,
+  },
+  playingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  playingOpenClass: {
+    flex: 1,
+  },
+  openClassBtn: {
+    height: 48,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.white,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
   },
   circle: {
     width: 72,

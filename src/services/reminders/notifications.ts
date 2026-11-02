@@ -15,6 +15,8 @@ import {
   type ReminderKind,
 } from '../../types/reminder';
 import type { PlannedRequest } from './schedule';
+import { planOpenClass } from './openClass';
+import type { ReminderTarget } from '../../types/reminder';
 
 /** A planned reminder plus the text needed to build its notification content. */
 export interface ReminderScheduleItem extends PlannedRequest {
@@ -27,6 +29,8 @@ export type ReminderNotificationData = {
   reminderId: string;
   kind: ReminderKind;
   fp: string;
+  src?: 'tt';            // study-timetable reminder
+  t?: ReminderTarget;    // where a tap goes (timetable reminders only)
 };
 
 export interface ApplyScheduleResult {
@@ -38,7 +42,7 @@ export interface ApplyScheduleResult {
 
 /** Navigation intent returned by the pure routing functions. The bridge executes it. */
 export interface NavigationIntent {
-  name: 'IncomingCall' | 'ReminderCall' | 'Reminders';
+  name: 'IncomingCall' | 'ReminderCall' | 'Reminders' | 'TopicDetails' | 'StudyTimetable';
   params: Record<string, unknown>;
 }
 
@@ -48,7 +52,9 @@ export type ResponsePlan =
   | { type: 'answer'; reminderId: string; outcome: 'answered'; nav: NavigationIntent }
   | { type: 'listen'; reminderId: string; outcome: 'delivered'; nav: NavigationIntent }
   | { type: 'done'; reminderId: string; outcome: 'delivered'; dismiss: true }
-  | { type: 'open'; reminderId: string; outcome: 'delivered'; nav: NavigationIntent };
+  | { type: 'open'; reminderId: string; outcome: 'delivered'; nav: NavigationIntent }
+  // Timetable reminder tapped: goes straight to the topic's Classes tab.
+  | { type: 'classes'; reminderId: string; outcome: 'answered' | 'delivered'; nav: NavigationIntent };
 
 const NOTIFICATION_TITLE_MAX = 60;
 const CALL_TITLE = 'Simple Lecture Teacher';
@@ -73,7 +79,13 @@ export function readReminderData(data: unknown): ReminderNotificationData | null
   if (d.type !== 'reminder' || d.v !== 2) return null;
   if (typeof d.reminderId !== 'string' || typeof d.fp !== 'string') return null;
   if (d.kind !== 'call' && d.kind !== 'message' && d.kind !== 'notification') return null;
-  return { type: 'reminder', v: 2, reminderId: d.reminderId, kind: d.kind, fp: d.fp };
+  const out: ReminderNotificationData = { type: 'reminder', v: 2, reminderId: d.reminderId, kind: d.kind, fp: d.fp };
+  // Timetable fields are optional. Older payloads keep their exact shape.
+  if (d.src === 'tt') {
+    out.src = 'tt';
+    if (d.t && typeof d.t === 'object') out.t = d.t as ReminderTarget;
+  }
+  return out;
 }
 
 /** Channels (Android) and action categories (both platforms). Safe to call repeatedly. */
@@ -129,7 +141,7 @@ export function ensureReminderChannels(): Promise<void> {
 
 /** Notification content for one reminder, per kind (D.4). */
 export function buildReminderContent(
-  item: Pick<ReminderScheduleItem, 'id' | 'kind' | 'text' | 'fp'>,
+  item: Pick<ReminderScheduleItem, 'id' | 'kind' | 'text' | 'fp'> & Partial<Pick<ReminderScheduleItem, 'src' | 'target'>>,
 ): Notifications.NotificationContentInput {
   const data: ReminderNotificationData = {
     type: 'reminder',
@@ -138,6 +150,10 @@ export function buildReminderContent(
     kind: item.kind,
     fp: item.fp,
   };
+  if (item.src === 'tt') {
+    data.src = 'tt';
+    if (item.target) data.t = item.target;
+  }
   const text = item.text.trim();
 
   if (item.kind === 'call') {
@@ -292,6 +308,17 @@ export async function applySchedulePlan(items: ReminderScheduleItem[]): Promise<
 export function planResponse(data: ReminderNotificationData, actionIdentifier: string): ResponsePlan {
   const { reminderId, kind } = data;
   const isDefaultTap = actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER;
+
+  // Timetable reminder, body tap (any kind): go straight to the topic's Classes tab.
+  // Call Answer and message Done keep their existing behaviour below.
+  if (data.src === 'tt' && isDefaultTap) {
+    return {
+      type: 'classes',
+      reminderId,
+      outcome: kind === 'call' ? 'answered' : 'delivered',
+      nav: planOpenClass(data.t, reminderId).intent,
+    };
+  }
 
   if (kind === 'call') {
     if (actionIdentifier === ACTIONS.decline) {

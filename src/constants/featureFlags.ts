@@ -9,6 +9,9 @@ export const FEATURES = {
   // Reminders v2. Only the development and preview EAS profiles set
   // EXPO_PUBLIC_REMINDERS_V2=1 (eas.json), so production stays off.
   reminders: process.env.EXPO_PUBLIC_REMINDERS_V2 === '1',
+  // Study-timetable reminder channels. Needs the reminders flag AND EXPO_PUBLIC_TT_REMINDERS=1.
+  // Never set in production.
+  timetableReminders: process.env.EXPO_PUBLIC_REMINDERS_V2 === '1' && process.env.EXPO_PUBLIC_TT_REMINDERS === '1',
 } as const;
 
 /**

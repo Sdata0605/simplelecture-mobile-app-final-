@@ -111,6 +111,14 @@ async function runPlan(plan: ResponsePlan, identifier: string) {
         console.warn('[Reminders] message screen not reached; reminder left pending', plan.reminderId);
       }
       break;
+    case 'classes':
+      // Timetable reminder tapped: open the topic's Classes tab. Record the outcome only once the screen is reached.
+      if (await go(plan.nav)) {
+        await markOutcome(plan.reminderId, plan.outcome).catch((e: unknown) => console.warn('[Reminders] classes outcome failed', e));
+      } else {
+        console.warn('[Reminders] classes screen not reached; reminder left pending', plan.reminderId);
+      }
+      break;
     case 'done':
       dismiss(identifier);
       await markOutcome(plan.reminderId, 'delivered').catch((e: unknown) => console.warn('[Reminders] done failed', e));

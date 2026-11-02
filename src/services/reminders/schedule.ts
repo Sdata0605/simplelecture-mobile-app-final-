@@ -10,6 +10,7 @@ import {
   type ReminderKind,
   type ReminderMode,
   type ReminderSection,
+  type ReminderTarget,
 } from '../../types/reminder';
 import { spokenScript } from './spokenScript';
 
@@ -28,6 +29,8 @@ export interface PlannedRequest {
   trigger: ReminderTrigger;
   fp: string;
   nextFire: Date;
+  src?: 'tt';                  // timetable reminder, copied into the notification data
+  target?: ReminderTarget | null;
 }
 
 export interface SchedulePlan {
@@ -211,10 +214,13 @@ export function buildTrigger(
 
 /** djb2 over kind|text|language|voice|trigger|enabled. Stored in content.data.fp. */
 export function fingerprint(
-  r: Pick<Reminder, 'kind' | 'message_text' | 'language' | 'voice' | 'enabled'>,
+  r: Pick<Reminder, 'kind' | 'message_text' | 'language' | 'voice' | 'enabled'> & Partial<Pick<Reminder, 'source' | 'target'>>,
   trigger: ReminderTrigger,
 ): string {
-  const source = [r.kind, r.message_text, r.language, r.voice, JSON.stringify(trigger), String(r.enabled)].join('|');
+  const parts = [r.kind, r.message_text, r.language, r.voice, JSON.stringify(trigger), String(r.enabled)];
+  // Timetable rows only: a topic or target change must re-arm the alarm. User rows keep their old fingerprint.
+  if (r.source === 'timetable') parts.push('tt', JSON.stringify(r.target ?? null));
+  const source = parts.join('|');
   let hash = 5381;
   for (let i = 0; i < source.length; i++) {
     hash = ((hash << 5) + hash + source.charCodeAt(i)) | 0;
@@ -239,6 +245,7 @@ export function planSchedule(
     if (!fire) continue;
     const trigger = buildTrigger(r);
     if (!trigger) continue;
+    const isTimetable = r.source === 'timetable';
     const planned: PlannedRequest = {
       id: r.id,
       identifier: `${REMINDER_NOTIF_PREFIX}${r.id}`,
@@ -246,6 +253,7 @@ export function planSchedule(
       trigger,
       fp: fingerprint(r, trigger),
       nextFire: fire,
+      ...(isTimetable ? { src: 'tt' as const, target: r.target ?? null } : {}),
     };
     if (isDailyRule(r.repeat_rule)) dailies.push(planned);
     else oneOffs.push(planned);

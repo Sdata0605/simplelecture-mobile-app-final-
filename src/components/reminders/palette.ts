@@ -7,6 +7,9 @@ export const KIND_STYLE = {
   notification: { icon: 'notifications',      fg: '#F59E0B', bg: '#FEF3C7', label: 'Notification' },
 } as const;
 
+// Email is a timetable-only channel (sent by the server). Does not touch KIND_STYLE.
+export const EMAIL_STYLE = { icon: 'mail', fg: '#8B5CF6', bg: '#F5F3FF', label: 'Email' } as const;
+
 export const TINT = {
   greenSoft: '#F0FDF4', amberBg: '#FEF3C7', amberText: '#B45309',
   redBg: '#FEE2E2', redText: '#B91C1C', successBg: '#D1FAE5',
