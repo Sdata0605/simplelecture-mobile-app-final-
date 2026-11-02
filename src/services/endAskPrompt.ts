@@ -30,10 +30,10 @@ export const INITIAL_WATCHED_STATE: WatchedState = { watchedMs: 0, lastPos: null
 
 /** True when the status is a genuine natural end (not a mid-video Android false positive). */
 export function isRealEnd(status: EndStatusLike): boolean {
-  if (!status.didJustFinish) return false;
   const pos = status.positionMillis ?? 0;
   const dur = status.durationMillis ?? 0;
-  return dur > 0 && dur - pos <= END_GUARD_MS;
+  // Fires at the end of the video however it got there (played, skipped, or short).
+  return dur > 0 && (!!status.didJustFinish || dur - pos <= END_GUARD_MS);
 }
 
 /**
@@ -69,9 +69,9 @@ export interface OfferInput {
 export function shouldOfferEndPrompt(input: OfferInput): boolean {
   if (!input.userId) return false;
   if (!input.available || input.isLive || input.busy) return false;
-  if (input.storedState !== null) return false;
-  if (input.durationMillis < MIN_DURATION_MS) return false;
-  return input.watchedMs >= MIN_WATCHED_RATIO * input.durationMillis;
+  // Product rule: always start at the end of the video (any length, watched or skipped).
+  // The once-per-lecture record is no longer checked here.
+  return input.durationMillis > 0;
 }
 
 export function endPromptKey(userId: string, jobId: string): string {

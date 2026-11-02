@@ -7,8 +7,6 @@ import {
   END_REARM_MS,
   EndStatusLike,
   INITIAL_WATCHED_STATE,
-  MIN_DURATION_MS,
-  MIN_WATCHED_RATIO,
   WatchedState,
   accumulateWatched,
   getEndPromptState,
@@ -86,14 +84,7 @@ export function useEndOfLecturePrompt({
       const d = deps.current;
       if (!d.userId) return;
       const key = `${d.userId}:${d.jobId}`;
-      const stored = await getEndPromptState(d.userId, d.jobId);
-      // Re-check after the await: state may have changed while reading storage.
       if (!pendingRef.current || handledRef.current.has(key) || !canShowNow()) return;
-      if (stored !== null) {
-        pendingRef.current = false;
-        handledRef.current.add(key);
-        return;
-      }
       const ok = shouldOfferEndPrompt({
         userId: d.userId,
         durationMillis: durationRef.current,
@@ -148,11 +139,7 @@ export function useEndOfLecturePrompt({
       if (!ended) return;
 
       endLatchedRef.current = true;
-      // Watched-time rule: seeking to the end without watching never qualifies.
-      const watchedEnough =
-        durationRef.current >= MIN_DURATION_MS &&
-        watchedRef.current.watchedMs >= MIN_WATCHED_RATIO * durationRef.current;
-      if (!watchedEnough) return;
+      if (durationRef.current <= 0) return;
       pendingRef.current = true;
       tryOffer();
     },
