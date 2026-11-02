@@ -51,6 +51,8 @@ import { useTimetableReminderSupport } from '../hooks/useTimetableReminderSuppor
 import { useReminderPermissions } from '../hooks/useReminderPermissions';
 import { useSubjectsForCourse, useChaptersForSubject, useTopicsForChapter } from '../hooks/useScopeContent';
 import { planDefaultChannel } from '../services/timetableReminders';
+import { syncReminders } from '../services/reminders';
+import { FEATURES } from '../constants/featureFlags';
 import type { ReminderChoice } from '../types/reminder';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList>;
@@ -140,6 +142,9 @@ export default function StudyTimetableScreen() {
   useFocusEffect(useCallback(() => {
     plansQuery.refetch();
     sessionsQuery.refetch();
+    if (FEATURES.reminders) {
+      syncReminders('manual').catch((e: unknown) => console.warn('[StudyTimetable] reminder sync failed', e));
+    }
   }, [plansQuery.refetch, sessionsQuery.refetch]));
 
   const visibleSessions = selectedPlanId

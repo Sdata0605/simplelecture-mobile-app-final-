@@ -14,6 +14,8 @@ import {
 } from '../../services/reminders/notifications';
 
 const FOREGROUND_SYNC_MIN_INTERVAL_MS = 60 * 1000;
+// While the app stays open, pick up server-side reminders (e.g. a timetable call at 4:55 PM).
+const ACTIVE_SYNC_INTERVAL_MS = 120 * 1000;
 // getLastNotificationResponseAsync keeps returning the previous tap on every launch,
 // so a cold-start response is only acted on when it is this recent.
 const COLD_START_MAX_AGE_MS = 10 * 60 * 1000;
@@ -182,6 +184,12 @@ export default function ReminderNotificationBridge(): null {
       syncReminders('foreground').catch((e: unknown) => console.warn('[Reminders] foreground sync failed', e));
     });
 
+    // syncReminders single-flights, so repeated calls never overlap. Not awaited here.
+    const activeSyncTimer = setInterval(() => {
+      if (AppState.currentState !== 'active') return;
+      syncReminders('foreground').catch((e: unknown) => console.warn('[Reminders] periodic sync failed', e));
+    }, ACTIVE_SYNC_INTERVAL_MS);
+
     const receivedSub = Notifications.addNotificationReceivedListener(handleReceived);
     const responseSub = Notifications.addNotificationResponseReceivedListener(response => {
       handleResponse(response).catch((e: unknown) => console.warn('[Reminders] response failed', e));
@@ -195,6 +203,7 @@ export default function ReminderNotificationBridge(): null {
       .catch(() => {});
 
     return () => {
+      clearInterval(activeSyncTimer);
       appStateSub.remove();
       receivedSub.remove();
       responseSub.remove();

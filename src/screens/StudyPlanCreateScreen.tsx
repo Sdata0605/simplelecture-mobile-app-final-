@@ -24,6 +24,8 @@ import {
 import { useSubjectsForCourse, useChaptersForSubject, useTopicsForChapter, useScopeContent } from '../hooks/useScopeContent';
 import { evaluateFeasibility, generatePlan, GenerateResult } from '../services/studyPlanApi';
 import { applyPlanChannel } from '../services/timetableReminders';
+import { syncReminders } from '../services/reminders';
+import { FEATURES } from '../constants/featureFlags';
 import { setCourseRemindersOff } from '../services/localReminderPrefs';
 import { scheduleStudyReminders } from '../services/scheduledNotifications';
 import { useAuth } from '../context/AuthContext';
@@ -208,6 +210,9 @@ export default function StudyPlanCreateScreen() {
         } catch {
           channelFailed = true;
         }
+      }
+      if (FEATURES.timetableReminders) {
+        syncReminders('mutation').catch((e: unknown) => console.warn('[StudyPlanCreate] reminder sync failed', e));
       }
       setReminderFailed(channelFailed);
       setResult(res);
