@@ -44,7 +44,7 @@
         ],
         "ITSAppUsesNonExemptEncryption": false
       },
-      "buildNumber": "6"
+      "buildNumber": "7"
     },
     "android": {
       "adaptiveIcon": {
@@ -67,7 +67,10 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#2BBD6E",
-          "sounds": ["./assets/sounds/study_call_ring.wav", "./assets/sounds/reminder_ring_27s.wav"]
+          "sounds": [
+            "./assets/sounds/study_call_ring.wav",
+            "./assets/sounds/reminder_ring_27s.wav"
+          ]
         }
       ],
       "./plugins/withFirebaseMessagingFix",
