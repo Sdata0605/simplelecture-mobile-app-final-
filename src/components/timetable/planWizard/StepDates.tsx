@@ -1,8 +1,8 @@
-// Step 2 of 5 · Dates (plan D.6). Two large field buttons. A calendar opens in a sheet
-// only when one is tapped, so there is never more than one calendar on screen.
+// Step 2 of 5 · Dates. Two date cards (Starts, Finish by) and one inline calendar below them, on the same page.
+// Tap a card, then tap a day. The days between start and finish are shaded. No modal and no Done button.
 
 import { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontFamily, borderRadius, spacing } from '../../../constants/theme';
 import DeadlinePicker from '../DeadlinePicker';
@@ -10,7 +10,7 @@ import {
   addDaysYmd, addMonthsYmd, daysBetweenYmd, formatDayShort, formatYmd, parseYmd,
 } from './state';
 
-type Sheet = 'start' | 'deadline' | null;
+type Target = 'start' | 'deadline';
 
 const QUICK: { label: string; add: (start: string) => string }[] = [
   { label: '2 weeks', add: s => addDaysYmd(s, 14) },
@@ -27,26 +27,54 @@ export default function StepDates({
   onStart(d: string): void;
   onDeadline(d: string): void;
 }) {
-  const [sheet, setSheet] = useState<Sheet>(null);
+  const [active, setActive] = useState<Target>('start');
   const today = formatYmd(new Date());
   const minDeadline = addDaysYmd(startDate, 1);
   const span = daysBetweenYmd(startDate, deadline);
+  const showRange = span > 0;
+
+  function pickDay(d: Date) {
+    const ymd = formatYmd(d);
+    if (active === 'start') {
+      onStart(ymd);
+      setActive('deadline'); // after a start pick, the finish card is next
+    } else {
+      onDeadline(ymd);
+    }
+  }
+
+  const isStart = active === 'start';
 
   return (
     <View>
       <Text style={styles.question} accessibilityRole="header">When do you start and finish?</Text>
 
-      <FieldButton
-        icon="calendar-outline"
-        label="Starts"
-        value={formatDayShort(startDate)}
-        onPress={() => setSheet('start')}
-      />
-      <FieldButton
-        icon="flag-outline"
-        label="Finish by"
-        value={formatDayShort(deadline)}
-        onPress={() => setSheet('deadline')}
+      <View style={styles.cards}>
+        <DateCard
+          label="Starts"
+          value={formatDayShort(startDate)}
+          selected={isStart}
+          onPress={() => setActive('start')}
+        />
+        <DateCard
+          label="Finish by"
+          value={formatDayShort(deadline)}
+          selected={!isStart}
+          onPress={() => setActive('deadline')}
+        />
+      </View>
+      <Text style={styles.hint}>
+        {isStart ? 'Tap a day to set the start date.' : 'Tap a day to set the finish date.'}
+      </Text>
+
+      {/* key remounts the calendar on card switch, so it opens on the month of the chosen date. */}
+      <DeadlinePicker
+        key={active}
+        value={parseYmd(isStart ? startDate : deadline)}
+        min={parseYmd(isStart ? today : minDeadline)}
+        rangeStart={showRange ? parseYmd(startDate) : undefined}
+        rangeEnd={showRange ? parseYmd(deadline) : undefined}
+        onChange={pickDay}
       />
 
       <Text style={styles.chipsLabel}>Quick pick (from the start date)</Text>
@@ -70,72 +98,43 @@ export default function StepDates({
           {span > 0 ? `${span} day${span === 1 ? '' : 's'} to study` : 'Pick a finish date after the start'}
         </Text>
       </View>
-
-      <Modal visible={sheet !== null} transparent animationType="slide" onRequestClose={() => setSheet(null)}>
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setSheet(null)} accessibilityLabel="Close calendar" />
-        <View style={styles.sheet}>
-          <Text style={styles.sheetTitle}>{sheet === 'start' ? 'Start date' : 'Finish by'}</Text>
-          {sheet === 'start' && (
-            <DeadlinePicker
-              value={parseYmd(startDate)}
-              min={parseYmd(today)}
-              onChange={d => onStart(formatYmd(d))}
-            />
-          )}
-          {sheet === 'deadline' && (
-            <DeadlinePicker
-              value={parseYmd(deadline)}
-              min={parseYmd(minDeadline)}
-              onChange={d => onDeadline(formatYmd(d))}
-            />
-          )}
-          <TouchableOpacity style={styles.doneBtn} onPress={() => setSheet(null)} accessibilityRole="button">
-            <Text style={styles.doneText}>Done</Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
     </View>
   );
 }
 
-function FieldButton({ icon, label, value, onPress }: {
-  icon: keyof typeof Ionicons.glyphMap;
+function DateCard({ label, value, selected, onPress }: {
   label: string;
   value: string;
+  selected: boolean;
   onPress(): void;
 }) {
   return (
-    <TouchableOpacity
-      style={styles.field}
+    <Pressable
+      style={[styles.card, selected && styles.cardOn]}
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`${label}: ${value}. Double tap to change`}
+      accessibilityState={{ selected }}
+      accessibilityLabel={`${label}: ${value}. ${selected ? 'Selected' : 'Double tap to choose this date'}`}
     >
-      <View style={styles.fieldIcon}>
-        <Ionicons name={icon} size={20} color={colors.primary} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.fieldLabel}>{label}</Text>
-        <Text style={styles.fieldValue}>{value}</Text>
-      </View>
-      <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-    </TouchableOpacity>
+      <Text style={[styles.cardLabel, selected && styles.cardLabelOn]}>{label}</Text>
+      <Text style={styles.cardValue}>{value}</Text>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   question: { fontSize: fontSize.xxl, fontFamily: fontFamily.heading, color: colors.text, marginBottom: spacing.md },
-  field: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    minHeight: 64, padding: spacing.sm, marginBottom: spacing.sm,
-    borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.white,
+  cards: { flexDirection: 'row', gap: spacing.sm },
+  card: {
+    flex: 1, minHeight: 64, padding: spacing.md, borderRadius: borderRadius.lg,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.white, justifyContent: 'center',
   },
-  fieldIcon: {
-    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#E8F8EF',
-  },
-  fieldLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.medium, color: colors.textSecondary },
-  fieldValue: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text, marginTop: 2 },
+  // Same green tint as TINT.greenSoft in components/reminders/palette.ts.
+  cardOn: { borderColor: colors.primary, borderWidth: 2, backgroundColor: '#F0FDF4' },
+  cardLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.medium, color: colors.textSecondary },
+  cardLabelOn: { color: colors.primaryDark },
+  cardValue: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text, marginTop: 2 },
+  hint: { fontSize: fontSize.sm, fontFamily: fontFamily.medium, color: colors.textSecondary, marginTop: spacing.xs, marginBottom: spacing.sm },
   chipsLabel: {
     fontSize: fontSize.sm, fontFamily: fontFamily.medium, color: colors.textSecondary,
     marginTop: spacing.md, marginBottom: spacing.xs,
@@ -152,15 +151,4 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
   },
   summaryText: { flex: 1, fontSize: fontSize.sm, color: colors.text, fontFamily: fontFamily.medium },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
-  sheet: {
-    backgroundColor: colors.white, borderTopLeftRadius: borderRadius.xl, borderTopRightRadius: borderRadius.xl,
-    padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md,
-  },
-  sheetTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text },
-  doneBtn: {
-    minHeight: 52, borderRadius: borderRadius.md, backgroundColor: colors.primary,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  doneText: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.white },
 });

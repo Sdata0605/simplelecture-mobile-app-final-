@@ -29,8 +29,12 @@ import {
   fetchUpcomingSessions,
   isReminderChoice,
   CHANNEL_LABEL,
+  type PlanChannelSummary,
   type ReminderChoice,
 } from '../services/timetableReminders';
+import { isCourseRemindersOff, setCourseRemindersOff } from '../services/localReminderPrefs';
+import { scheduleStudyReminders } from '../services/scheduledNotifications';
+import { useTimetableReminderSupport } from '../hooks/useTimetableReminderSupport';
 
 type ReminderSettingsRouteParams = {
   TimetableReminderSettings: { courseId: string; planId?: string };
@@ -75,10 +79,20 @@ export default function TimetableReminderSettingsScreen() {
   const plansQuery = useStudyTimetablePlans(courseId);
   const plans = plansQuery.data;
   const perms = useReminderPermissions();
+  const support = useTimetableReminderSupport();
+  // Full mode: the server stores each session's channel. Basic mode (or still checking): the choice lives on this phone.
+  const full = support.status === 'full';
 
   const [pickedPlanId, setPickedPlanId] = useState<string | null>(planId ?? null);
   const selectedPlanId = pickedPlanId ?? plans[0]?.id ?? null;
   const selectedPlan = plans.find(p => p.id === selectedPlanId) ?? null;
+
+  const [localOff, setLocalOff] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    isCourseRemindersOff(courseId).then(v => { if (!cancelled) setLocalOff(v); });
+    return () => { cancelled = true; };
+  }, [courseId]);
 
   const [sessions, setSessions] = useState<StudyTimetableSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -91,7 +105,8 @@ export default function TimetableReminderSettingsScreen() {
 
   useEffect(() => {
     setShown(PAGE);
-    if (!selectedPlanId) {
+    // Per-session list exists only in full mode.
+    if (!selectedPlanId || !full) {
       setSessions([]);
       return;
     }
@@ -103,9 +118,11 @@ export default function TimetableReminderSettingsScreen() {
       .catch(() => { if (!cancelled) { setSessions([]); setSessionsError(true); } })
       .finally(() => { if (!cancelled) setSessionsLoading(false); });
     return () => { cancelled = true; };
-  }, [selectedPlanId, reloadKey]);
+  }, [selectedPlanId, reloadKey, full]);
 
-  const summary = selectedPlan ? planDefaultChannel(selectedPlan, sessions) : null;
+  const summary: PlanChannelSummary = full
+    ? (selectedPlan ? planDefaultChannel(selectedPlan, sessions) : null)
+    : (localOff ? 'none' : 'notification');
   const defaultValue: ReminderChoice | null = isReminderChoice(summary) ? summary : null;
   const needsNotifications =
     perms.notifications === 'denied' &&
@@ -114,11 +131,27 @@ export default function TimetableReminderSettingsScreen() {
   // Master switch for the whole course. Off = every upcoming pending session of every plan goes to 'none'
   // (plan defaults kept, so On can restore them). On = sessions that are 'none' go back to their plan default.
   // The switch reads the selected plan's loaded sessions: it shows Off only when all of them are 'none'.
-  const masterOff = sessions.length > 0 && sessions.every(s => s.reminder_channel === 'none');
+  const masterOff = full
+    ? sessions.length > 0 && sessions.every(s => s.reminder_channel === 'none')
+    : localOff;
   const masterOn = plans.length > 0 && !masterOff;
 
   async function onToggleMaster(on: boolean) {
     if (busy || plans.length === 0 || on === masterOn) return;
+    if (!full) {
+      // Basic mode: only the phone-side switch exists. Notifications for this course follow it.
+      setBusy(true);
+      try {
+        await setCourseRemindersOff(courseId, !on);
+        await scheduleStudyReminders();
+        setLocalOff(!on);
+      } catch {
+        Alert.alert('Could not save', 'Try again.');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setBusy(true);
     let noneUnsupported = false;
     try {
@@ -170,6 +203,19 @@ export default function TimetableReminderSettingsScreen() {
   async function applyDefault(choice: ReminderChoice, onlyMatching?: ReminderChoice | null) {
     const plan = selectedPlan;
     if (!plan || busy) return;
+    if (!full) {
+      setBusy(true);
+      try {
+        await setCourseRemindersOff(courseId, choice === 'none');
+        await scheduleStudyReminders();
+        setLocalOff(choice === 'none');
+      } catch {
+        Alert.alert('Could not save', 'Try again.');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const affected = sessions.filter(s => onlyMatching === undefined || (s.reminder_channel ?? null) === onlyMatching);
     const prev = new Map<string, ReminderChoice | null>();
     const next = new Map<string, ReminderChoice | null>();
@@ -327,7 +373,7 @@ export default function TimetableReminderSettingsScreen() {
           <Text style={styles.helper}>
             Current default: {summary === 'mixed' ? 'Mixed' : channelLabel(defaultValue)}. Changing it updates every upcoming session that still follows the plan.
           </Text>
-          <ChannelOptions value={defaultValue} onChange={onPickDefault} disabled={busy} />
+          <ChannelOptions value={defaultValue} onChange={onPickDefault} disabled={busy} allowed={support.channels} />
           {summary === 'mixed' ? (
             <Text style={styles.helper}>Sessions have different reminders. Pick one to set them all.</Text>
           ) : null}
@@ -342,7 +388,9 @@ export default function TimetableReminderSettingsScreen() {
             Upcoming sessions
           </Text>
 
-          {sessionsLoading ? (
+          {!full ? (
+            <Text style={styles.helper}>Per-session reminders arrive in a later update.</Text>
+          ) : sessionsLoading ? (
             <View style={styles.center}>
               <ActivityIndicator color={colors.primary} />
             </View>
@@ -407,6 +455,7 @@ export default function TimetableReminderSettingsScreen() {
         visible={sheetSession !== null}
         session={sheetSession}
         planDefault={summary}
+        allowed={support.channels}
         onClose={() => setSheetSession(null)}
         onSaved={(prev, next) => {
           if (sheetSession) onSessionSaved(sheetSession, prev, next);

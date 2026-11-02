@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,9 +9,7 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
-  Animated,
   TextInput,
-  Dimensions,
   Platform,
 } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
@@ -21,7 +19,9 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, fontSize, borderRadius, fontFamily } from '../constants/theme';
-import { planScopeLabel, buildCalendarGrid, datePrefixForDay, localDateKey } from '../utils/calendar';
+import { localDateKey, datePrefixForDay } from '../utils/calendar';
+import { buildSessionMarkers } from '../utils/calendarMarkers';
+import MonthGrid from '../components/calendar/MonthGrid';
 import { useSidebar } from '../context/SidebarContext';
 import HeaderMenuButton from '../components/HeaderMenuButton';
 import { RootStackParamList } from '../navigation/AppNavigator';
@@ -34,74 +34,33 @@ import {
   patchSession,
   deleteSession,
   deletePlan,
-  StudyTimetablePlan,
   StudyTimetableSession,
   SelfTest,
 } from '../hooks/useStudyTimetable';
 import { scheduleStudyReminders } from '../services/scheduledNotifications';
 import AutoChapterTestBanner from '../components/AutoChapterTestBanner';
-import ReminderChannelPicker from '../components/timetable/ReminderChannelPicker';
-import PlanReminderRow from '../components/timetable/PlanReminderRow';
 import SessionChannelSheet from '../components/timetable/SessionChannelSheet';
 import SimpleSelect from '../components/timetable/SimpleSelect';
+import PlanCard from '../components/timetable/PlanCard';
+import TestCard from '../components/timetable/TestCard';
+import DayAgendaList from '../components/timetable/DayAgendaList';
+import SessionActionsSheet from '../components/timetable/SessionActionsSheet';
+import SessionEditSheet from '../components/timetable/SessionEditSheet';
+import TimetableReminderCard from '../components/timetable/TimetableReminderCard';
+import { useTimetableReminderSupport } from '../hooks/useTimetableReminderSupport';
+import { useReminderPermissions } from '../hooks/useReminderPermissions';
 import { useSubjectsForCourse, useChaptersForSubject, useTopicsForChapter } from '../hooks/useScopeContent';
 import { planDefaultChannel } from '../services/timetableReminders';
-import { KIND_STYLE, EMAIL_STYLE } from '../components/reminders/palette';
-import { FEATURES } from '../constants/featureFlags';
-import type { ReminderChannel, ReminderChoice } from '../types/reminder';
+import type { ReminderChoice } from '../types/reminder';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList>;
 
-// ─── reminder channel ────────────────────────────────────────────────────────
-const CHANNEL_CHIP_LABEL: Record<ReminderChannel, string> = {
-  call: 'Call', message: 'Text', notification: 'Notification', email: 'Email',
-};
-
-function channelChipStyle(channel: ReminderChoice | null | undefined) {
-  if (!channel || channel === 'none') return { fg: colors.textMuted, bg: '#F3F4F6', icon: 'notifications-off-outline', label: 'Off' };
-  const k =
-    channel === 'call' ? KIND_STYLE.call :
-    channel === 'message' ? KIND_STYLE.message :
-    channel === 'notification' ? KIND_STYLE.notification : EMAIL_STYLE;
-  return { fg: k.fg, bg: k.bg, icon: k.icon, label: CHANNEL_CHIP_LABEL[channel] };
-}
-
-/** Only pending study sessions take a reminder channel. Flag off: nothing is shown. */
+/** Only pending study sessions take a reminder channel. */
 function canSetChannel(s: StudyTimetableSession): boolean {
-  return FEATURES.timetableReminders && s.status === 'pending' && s.session_type !== 'test';
+  return s.status === 'pending' && s.session_type !== 'test';
 }
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const PLAN_CARD_WIDTH = SCREEN_WIDTH * 0.72;
-const DAYS_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-// Calendar grid: 7 columns × 6 rows = always 42 cells
-const CAL_CELL_SIZE = Math.floor((SCREEN_WIDTH - spacing.md * 2) / 7);
-
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-
-// ─── helpers ─────────────────────────────────────────────────────────────────
-
-function formatDate(iso: string) {
-  try {
-    return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-  } catch { return iso; }
-}
-function formatDateTime(iso: string) {
-  try {
-    return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-  } catch { return iso; }
-}
-function formatTime(iso: string) {
-  try {
-    return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-  } catch { return ''; }
-}
-
-// Calendar / date helpers (planScopeLabel, buildCalendarGrid, datePrefixForDay,
-// localDateKey) live in ../utils/calendar so they can be unit-tested without RN.
+interface SelectOption { id: string; name: string }
 
 async function edgePost(fnName: string, body: object): Promise<any> {
   const token = await supabase.getAccessToken();
@@ -118,29 +77,6 @@ async function edgePost(fnName: string, body: object): Promise<any> {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-// ─── AmberGlowPill ────────────────────────────────────────────────────────────
-// Glowing amber border + background pulse (1.8 s loop). Uses useNativeDriver:false
-// to animate borderColor / backgroundColor opacity.
-
-function AmberGlowPill() {
-  const anim = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(anim, { toValue: 1, duration: 900, useNativeDriver: false }),
-        Animated.timing(anim, { toValue: 0, duration: 900, useNativeDriver: false }),
-      ])
-    ).start();
-  }, []);
-  const bg = anim.interpolate({ inputRange: [0, 1], outputRange: ['rgba(251,191,36,0.2)', 'rgba(251,191,36,0.7)'] });
-  const border = anim.interpolate({ inputRange: [0, 1], outputRange: ['rgba(217,119,6,0.4)', 'rgba(217,119,6,1)'] });
-  return (
-    <Animated.View style={[styles.amberGlowPill, { backgroundColor: bg, borderColor: border }]} />
-  );
-}
-
-interface SelectOption { id: string; name: string }
-
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
 export default function StudyTimetableScreen() {
@@ -148,23 +84,29 @@ export default function StudyTimetableScreen() {
   const { openSidebar } = useSidebar();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const reminderSupport = useTimetableReminderSupport();
+  const reminderPerms = useReminderPermissions();
 
   const [enrolledCourses, setEnrolledCourses] = useState<{ id: string; name: string }[]>([]);
   const [loadingCourses, setLoadingCourses] = useState(true);
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
 
-  const today = new Date();
-  const [calYear, setCalYear] = useState(today.getFullYear());
-  const [calMonth, setCalMonth] = useState(today.getMonth());
-  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const now = new Date();
+  const todayKey = datePrefixForDay(now.getFullYear(), now.getMonth(), now.getDate());
+  const [calYear, setCalYear] = useState(now.getFullYear());
+  const [calMonth, setCalMonth] = useState(now.getMonth());
+  const [selectedKey, setSelectedKey] = useState<string>(todayKey);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
 
-  const [showDaySheet, setShowDaySheet] = useState(false);
   const [showTestModal, setShowTestModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'timetable' | 'test'>('timetable');
+  const [actionSession, setActionSession] = useState<StudyTimetableSession | null>(null);
+  const [editSession, setEditSession] = useState<StudyTimetableSession | null>(null);
+  const [channelSession, setChannelSession] = useState<StudyTimetableSession | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const plansQuery = useStudyTimetablePlans(selectedCourseId);
-  const planIds = selectedPlanId ? [selectedPlanId] : plansQuery.data.map(p => p.id);
+  // Always fetch every plan's sessions so per-plan progress is correct; the plan filter is applied below.
+  const planIds = plansQuery.data.map(p => p.id);
   const sessionsQuery = useStudyTimetableSessions(selectedCourseId, planIds);
   const testsQuery = useSelfTests(selectedCourseId);
 
@@ -200,43 +142,30 @@ export default function StudyTimetableScreen() {
     sessionsQuery.refetch();
   }, [plansQuery.refetch, sessionsQuery.refetch]));
 
+  const visibleSessions = selectedPlanId
+    ? sessionsQuery.data.filter(s => s.timetable_id === selectedPlanId)
+    : sessionsQuery.data;
+
+  const markers = buildSessionMarkers(visibleSessions, testsQuery.data);
+  const daySessions = visibleSessions.filter(s => localDateKey(s.scheduled_at) === selectedKey);
+  const dayTests = testsQuery.data.filter(t => localDateKey(t.scheduled_at) === selectedKey);
+
+  function planSessionsOf(planId: string) {
+    return sessionsQuery.data.filter(s => s.timetable_id === planId);
+  }
+
   /** Default channel of the plan a session belongs to (null when mixed or unknown). */
   function planDefaultFor(s: StudyTimetableSession): ReminderChoice | null {
     const plan = plansQuery.data.find(p => p.id === s.timetable_id);
     if (!plan) return null;
-    const d = planDefaultChannel(plan, sessionsQuery.data);
+    const d = planDefaultChannel(plan, planSessionsOf(plan.id));
     return d === 'mixed' ? null : d;
   }
 
-  const calGrid = buildCalendarGrid(calYear, calMonth); // always 42 cells
-
-  const sessionsOnDay = useCallback((day: number) => {
-    const key = datePrefixForDay(calYear, calMonth, day);
-    return sessionsQuery.data.filter(s => localDateKey(s.scheduled_at) === key);
-  }, [sessionsQuery.data, calYear, calMonth]);
-
-  const testsOnDay = useCallback((day: number) => {
-    const key = datePrefixForDay(calYear, calMonth, day);
-    return testsQuery.data.filter(t => localDateKey(t.scheduled_at) === key);
-  }, [testsQuery.data, calYear, calMonth]);
-
-  function handleDayPress(day: number | null) {
-    if (!day) return;
-    setSelectedDay(day);
-    setShowDaySheet(true);
+  function progressOf(planId: string) {
+    const mine = planSessionsOf(planId).filter(s => s.session_type !== 'test');
+    return { done: mine.filter(s => s.status === 'done').length, total: mine.length };
   }
-
-  function prevMonth() {
-    if (calMonth === 0) { setCalYear(y => y - 1); setCalMonth(11); }
-    else setCalMonth(m => m - 1);
-  }
-  function nextMonth() {
-    if (calMonth === 11) { setCalYear(y => y + 1); setCalMonth(0); }
-    else setCalMonth(m => m + 1);
-  }
-
-  const isToday = (day: number) =>
-    calYear === today.getFullYear() && calMonth === today.getMonth() && day === today.getDate();
 
   function handlePlanCardPress(planId: string) {
     setSelectedPlanId(prev => (prev === planId ? null : planId));
@@ -261,17 +190,57 @@ export default function StudyTimetableScreen() {
     ]);
   }
 
-  function openReminderSettings() {
+  function openReminderSettings(planId?: string) {
     const courseId = selectedCourseId ?? enrolledCourses[0]?.id ?? null;
     if (!courseId) {
       Alert.alert('No course yet', 'Enrol in a course to set timetable reminders.');
       return;
     }
-    navigation.navigate('TimetableReminderSettings', { courseId });
+    navigation.navigate('TimetableReminderSettings', { courseId, ...(planId ? { planId } : {}) });
   }
 
-  const dayDetailSessions = selectedDay ? sessionsOnDay(selectedDay) : [];
-  const dayDetailTests = selectedDay ? testsOnDay(selectedDay) : [];
+  function openCreatePlan() {
+    if (!selectedCourseId) return;
+    navigation.navigate('StudyPlanCreate', {
+      courseId: selectedCourseId,
+      courseName: enrolledCourses.find(c => c.id === selectedCourseId)?.name ?? 'Course',
+    });
+  }
+
+  async function runSessionAction(sessionId: string, action: 'done' | 'skipped' | 'delete') {
+    setActionBusy(true);
+    try {
+      if (action === 'delete') {
+        await deleteSession(sessionId);
+      } else {
+        await patchSession(sessionId, { status: action });
+      }
+      setActionSession(null);
+      sessionsQuery.refetch();
+    } catch (e: any) {
+      Alert.alert('Error', e.message ?? 'Action failed');
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  function confirmDeleteSession(s: StudyTimetableSession) {
+    setActionSession(null);
+    Alert.alert('Delete Session', `Delete "${s.title}"?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => runSessionAction(s.id, 'delete') },
+    ]);
+  }
+
+  function openEditFromActions() {
+    const s = actionSession;
+    setActionSession(null);
+    if (s) setEditSession(s);
+  }
+
+  const editDay = editSession ? localDateKey(editSession.scheduled_at) : null;
+  const editDaySessions = editDay ? sessionsQuery.data.filter(s => localDateKey(s.scheduled_at) === editDay) : [];
+  const editDayTests = editDay ? testsQuery.data.filter(t => localDateKey(t.scheduled_at) === editDay) : [];
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -284,16 +253,18 @@ export default function StudyTimetableScreen() {
       >
         <View style={{ width: 36 }} />
         <Text style={styles.headerTitle}>Timetable</Text>
-        {FEATURES.timetableReminders && (
-          <TouchableOpacity
-            style={styles.headerIconBtn}
-            onPress={openReminderSettings}
-            accessibilityRole="button"
-            accessibilityLabel="Reminder settings"
-          >
-            <Ionicons name="notifications-outline" size={22} color={colors.white} />
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          style={styles.remindersPill}
+          onPress={() => openReminderSettings()}
+          accessibilityRole="button"
+          accessibilityLabel={reminderPerms.notifications === 'denied'
+            ? 'Reminders. Notifications are blocked on this phone'
+            : 'Reminders. Open reminder settings'}
+        >
+          <Ionicons name="notifications-outline" size={18} color={colors.white} />
+          <Text style={styles.remindersPillText}>Reminders</Text>
+          {reminderPerms.notifications === 'denied' && <View style={styles.redDot} />}
+        </TouchableOpacity>
         <HeaderMenuButton onPress={openSidebar} />
       </LinearGradient>
 
@@ -311,6 +282,8 @@ export default function StudyTimetableScreen() {
                       key={c.id}
                       style={[styles.chip, selectedCourseId === c.id && styles.chipActive]}
                       onPress={() => { setSelectedCourseId(c.id); setSelectedPlanId(null); }}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: selectedCourseId === c.id }}
                     >
                       <Text style={[styles.chipText, selectedCourseId === c.id && styles.chipTextActive]} numberOfLines={1}>
                         {c.name}
@@ -324,13 +297,30 @@ export default function StudyTimetableScreen() {
 
         <AutoChapterTestBanner />
 
+        <View style={styles.reminderWrap}>
+          <TimetableReminderCard
+            courseId={selectedCourseId}
+            plans={plansQuery.data}
+            sessions={sessionsQuery.data}
+            support={reminderSupport}
+            permission={reminderPerms.notifications}
+            onOpenSettings={planId => openReminderSettings(planId)}
+            onCreatePlan={openCreatePlan}
+            onFixPermission={reminderPerms.openNotificationSettings}
+          />
+        </View>
+
         {/* Plans & Tests strip */}
         <View style={styles.sectionHeaderRow}>
-          <Ionicons name="layers-outline" size={16} color={colors.primary} />
-          <Text style={styles.sectionTitle}>My Plans & Tests</Text>
+          <Text style={styles.sectionTitle}>My plans and tests</Text>
           {selectedPlanId && (
-            <TouchableOpacity onPress={() => setSelectedPlanId(null)} style={styles.clearFilter}>
-              <Text style={styles.clearFilterText}>Clear filter ×</Text>
+            <TouchableOpacity
+              onPress={() => setSelectedPlanId(null)}
+              style={styles.clearFilter}
+              accessibilityRole="button"
+              accessibilityLabel="Clear plan filter and show all sessions"
+            >
+              <Text style={styles.clearFilterText}>Clear filter</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -340,7 +330,7 @@ export default function StudyTimetableScreen() {
         ) : plansQuery.data.length === 0 && testsQuery.data.length === 0 ? (
           <View style={styles.emptyPlanCard}>
             <Ionicons name="calendar-outline" size={36} color={colors.textMuted} />
-            <Text style={styles.emptyPlanText}>No plans yet.{'\n'}Use the options below to start an AI plan or schedule a test.</Text>
+            <Text style={styles.emptyPlanText}>No plans yet.{'\n'}Create a study plan below to get started.</Text>
           </View>
         ) : (
           <FlatList
@@ -354,276 +344,122 @@ export default function StudyTimetableScreen() {
             contentContainerStyle={styles.planStrip}
             renderItem={({ item }) => {
               if (item.type === 'plan') {
-                const plan = item.data as StudyTimetablePlan;
-                const isSelected = selectedPlanId === plan.id;
-                const meta = plan.plan_metadata ?? {};
-                const isAI = plan.mode === 'auto';
-                const planTitle = meta.scopeLabel || (isAI ? 'AI Study Plan' : 'Study Plan');
-                const planDeadline = meta.deadline;
-                const scopeLabel = planScopeLabel(meta.scopeType);
+                const plan = item.data;
                 return (
-                  <TouchableOpacity
-                    style={[styles.planCard, styles.planCardPurple, isSelected && styles.planCardSelected]}
+                  <PlanCard
+                    plan={plan}
+                    progress={progressOf(plan.id)}
+                    reminder={planDefaultChannel(plan, planSessionsOf(plan.id))}
+                    selected={selectedPlanId === plan.id}
+                    remindersAvailable
                     onPress={() => handlePlanCardPress(plan.id)}
-                    activeOpacity={0.85}
-                  >
-                    <View style={styles.planCardTop}>
-                      <View style={[styles.modeBadge, isAI ? styles.modeBadgeAI : styles.modeBadgeManual]}>
-                        <Text style={styles.modeBadgeText}>{isAI ? 'AI Auto' : 'Manual'}</Text>
-                      </View>
-                      <View style={styles.planCardActions}>
-                        {FEATURES.timetableReminders && (
-                          <TouchableOpacity
-                            onPress={() => navigation.navigate('TimetableReminderSettings', { courseId: plan.course_id, planId: plan.id })}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Reminder settings for ${planTitle}`}
-                          >
-                            <Ionicons name="notifications-outline" size={16} color="#A78BFA" />
-                          </TouchableOpacity>
-                        )}
-                        <TouchableOpacity onPress={() => confirmDeletePlan(plan.id, planTitle)}>
-                          <Ionicons name="trash-outline" size={16} color="#A78BFA" />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                    <Text style={styles.planCardTitle} numberOfLines={2}>{planTitle}</Text>
-                    {planDeadline && (
-                      <View style={styles.planCardMeta}>
-                        <Ionicons name="flag-outline" size={12} color="#C4B5FD" />
-                        <Text style={styles.planCardMetaText}>Due {formatDate(planDeadline)}</Text>
-                      </View>
-                    )}
-                    {scopeLabel && (
-                      <View style={styles.planCardMeta}>
-                        <Ionicons name="book-outline" size={12} color="#C4B5FD" />
-                        <Text style={styles.planCardMetaText}>{scopeLabel}</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
+                    onOpenReminders={() => navigation.navigate('TimetableReminderSettings', { courseId: plan.course_id, planId: plan.id })}
+                    onDelete={() => confirmDeletePlan(plan.id, plan.plan_metadata?.scopeLabel || (plan.mode === 'auto' ? 'AI Study Plan' : 'Study Plan'))}
+                  />
                 );
               }
-              const test = item.data as SelfTest;
-              return (
-                <View style={[styles.planCard, styles.planCardAmber]}>
-                  <View style={styles.planCardTop}>
-                    <View style={styles.testBadge}>
-                      <Text style={styles.testBadgeText}>Test</Text>
-                    </View>
-                    <View style={styles.testTypeBadge}>
-                      <Text style={styles.testTypeBadgeText}>{test.test_type === 'topic' ? 'Topic' : 'Chapter'}</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.planCardTitleAmber} numberOfLines={2}>{test.title}</Text>
-                  <View style={styles.planCardMeta}>
-                    <Ionicons name="time-outline" size={12} color="#FCD34D" />
-                    <Text style={styles.planCardMetaTextAmber}>{formatDateTime(test.scheduled_at)}</Text>
-                  </View>
-                  <View style={styles.planCardMeta}>
-                    <Ionicons name="hourglass-outline" size={12} color="#FCD34D" />
-                    <Text style={styles.planCardMetaTextAmber}>{test.duration_minutes} min · {test.total_questions} Qs</Text>
-                  </View>
-                </View>
-              );
+              return <TestCard test={item.data as SelfTest} />;
             }}
           />
         )}
 
-        {FEATURES.timetableReminders && (() => {
-          const reminderPlan = plansQuery.data.find(p => p.id === selectedPlanId) ?? plansQuery.data[0];
-          if (!reminderPlan) return null;
-          const meta = reminderPlan.plan_metadata ?? {};
-          const planTitle = meta.scopeLabel || (reminderPlan.mode === 'auto' ? 'AI Study Plan' : 'Study Plan');
-          return (
-            <View style={styles.reminderRowWrap}>
-              <PlanReminderRow
-                planTitle={planTitle}
-                summary={planDefaultChannel(reminderPlan, sessionsQuery.data)}
-                onPress={() => navigation.navigate('TimetableReminderSettings', { courseId: reminderPlan.course_id, planId: reminderPlan.id })}
-              />
-            </View>
-          );
-        })()}
-
-        {/* Calendar */}
-        <View style={styles.calendarCard}>
-          <View style={styles.calNavRow}>
-            <TouchableOpacity onPress={prevMonth} style={styles.calNavBtn}>
-              <Ionicons name="chevron-back" size={22} color={colors.text} />
-            </TouchableOpacity>
-            <Text style={styles.calMonthTitle}>{MONTH_NAMES[calMonth]} {calYear}</Text>
-            <TouchableOpacity onPress={nextMonth} style={styles.calNavBtn}>
-              <Ionicons name="chevron-forward" size={22} color={colors.text} />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.calDayHeaders}>
-            {DAYS_SHORT.map(d => (
-              <Text key={d} style={styles.calDayHeader}>{d}</Text>
-            ))}
-          </View>
-
-          {/* 42-cell grid */}
-          <View style={styles.calGrid}>
-            {calGrid.map((day, idx) => {
-              if (day === null) {
-                return <View key={`e-${idx}`} style={[styles.calCell, styles.calCellEmpty]} />;
-              }
-              const daySessions = sessionsOnDay(day);
-              const dayTests = testsOnDay(day);
-              const hasTest = dayTests.length > 0;
-              const todayCell = isToday(day);
-              const doneSessions = daySessions.filter(s => s.status === 'done');
-              const pendingSessions = daySessions.filter(s => s.status === 'pending');
-              const skippedSessions = daySessions.filter(s => s.status === 'skipped');
-
-              return (
-                <TouchableOpacity
-                  key={`d-${day}`}
-                  style={[styles.calCell, todayCell && styles.calCellToday]}
-                  onPress={() => handleDayPress(day)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.calDayNum, todayCell && styles.calDayNumToday]}>{day}</Text>
-
-                  {daySessions.length > 0 && (
-                    <View style={styles.sessionBadge}>
-                      <Text style={styles.sessionBadgeText}>{daySessions.length}</Text>
-                    </View>
-                  )}
-
-                  {pendingSessions.slice(0, 2).map(s => (
-                    <Text key={s.id} style={styles.calSessionTitle} numberOfLines={1}>{s.title}</Text>
-                  ))}
-
-                  {skippedSessions.length > 0 && (
-                    <Text style={styles.calSkippedText}>
-                      {skippedSessions.map(s => s.title).join(', ').slice(0, 14) + (skippedSessions[0]?.title?.length > 14 ? '…' : '')}
-                    </Text>
-                  )}
-
-                  {doneSessions.length > 0 && (
-                    <Text style={styles.calDoneText}>✓ {doneSessions.length}</Text>
-                  )}
-
-                  {hasTest && <AmberGlowPill />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+        {/* Calendar: one shared MonthGrid; tapping a day shows its list below */}
+        <View style={styles.calendarWrap}>
+          <MonthGrid
+            mode="agenda"
+            year={calYear}
+            month={calMonth}
+            onChangeMonth={(y, m) => { setCalYear(y); setCalMonth(m); }}
+            selectedKey={selectedKey}
+            todayKey={todayKey}
+            onSelect={setSelectedKey}
+            markers={markers}
+            showTodayButton
+            testID="timetable-calendar"
+          />
         </View>
 
         {/* Legend */}
-        <View style={styles.legend}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: colors.primary }]} />
-            <Text style={styles.legendText}>Today</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
-            <Text style={styles.legendText}>Test scheduled</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: colors.success }]} />
-            <Text style={styles.legendText}>Done</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: colors.textMuted }]} />
-            <Text style={styles.legendText}>Skipped</Text>
-          </View>
+        <View style={styles.legend} accessible accessibilityLabel="Dot colours: to do, done, skipped, test">
+          <LegendItem color={colors.primary} label="To do" />
+          <LegendItem color={colors.success} label="Done" />
+          <LegendItem color={colors.gray300} label="Skipped" />
+          <LegendItem color={colors.warning} label="Test" />
         </View>
 
-        {/* Action card: Time Table / Schedule Test tabs */}
-        <View style={styles.actionCard}>
-          <View style={styles.tabBar}>
-            <TouchableOpacity
-              style={[styles.tabBtn, activeTab === 'timetable' && styles.tabBtnActive]}
-              onPress={() => setActiveTab('timetable')}
-              activeOpacity={0.85}
-            >
-              <Ionicons
-                name="sparkles"
-                size={16}
-                color={activeTab === 'timetable' ? colors.text : colors.textMuted}
-              />
-              <Text style={[styles.tabBtnText, activeTab === 'timetable' && styles.tabBtnTextActive]}>
-                Time Table
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.tabBtn, activeTab === 'test' && styles.tabBtnActive]}
-              onPress={() => setActiveTab('test')}
-              activeOpacity={0.85}
-            >
-              <Ionicons
-                name="document-text-outline"
-                size={16}
-                color={activeTab === 'test' ? colors.text : colors.textMuted}
-              />
-              <Text style={[styles.tabBtnText, activeTab === 'test' && styles.tabBtnTextActive]}>
-                Schedule Test
-              </Text>
-            </TouchableOpacity>
-          </View>
+        {/* Selected day */}
+        <View style={styles.dayWrap}>
+          <DayAgendaList
+            dateKey={selectedKey}
+            sessions={daySessions}
+            tests={dayTests}
+            loading={sessionsQuery.isLoading}
+            canSetChannel={canSetChannel}
+            channelOf={s => s.reminder_channel}
+            onOpenSession={s => setActionSession(s)}
+            onOpenChannel={s => setChannelSession(s)}
+            onOpenTest={() => {
+              // Test-taking screen is out of scope; keep the existing stub route.
+              (navigation as any).navigate('MainTabs', { screen: 'MyCourses' });
+            }}
+          />
+        </View>
 
-          {activeTab === 'timetable' ? (
-            <View style={styles.wizardCard}>
-              <View style={styles.wizardIconCircle}>
-                <Ionicons name="sparkles" size={24} color={colors.primary} />
-              </View>
-              <Text style={styles.wizardCardTitle}>AI Study Plan Wizard</Text>
-              <Text style={styles.wizardCardSubtitle}>
-                Answer a few quick questions and we'll generate a personalized schedule.
-              </Text>
-              <TouchableOpacity
-                style={styles.wizardCardBtn}
-                onPress={() => {
-                  if (!selectedCourseId) return;
-                  navigation.navigate('StudyPlanCreate', {
-                    courseId: selectedCourseId,
-                    courseName: enrolledCourses.find(c => c.id === selectedCourseId)?.name ?? 'Course',
-                  });
-                }}
-                disabled={!selectedCourseId}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="sparkles" size={16} color={colors.white} />
-                <Text style={styles.wizardCardBtnText}>Create study plan</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View style={styles.wizardCard}>
-              <View style={styles.wizardIconCircle}>
-                <Ionicons name="document-text-outline" size={24} color={colors.primary} />
-              </View>
-              <Text style={styles.wizardCardTitle}>Schedule a Test</Text>
-              <Text style={styles.wizardCardSubtitle}>
-                Set up a topic or chapter test and we'll add it to your calendar.
-              </Text>
-              <TouchableOpacity
-                style={styles.wizardCardBtn}
-                onPress={() => setShowTestModal(true)}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="add" size={18} color={colors.white} />
-                <Text style={styles.wizardCardBtnText}>Schedule test</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+        {/* Create plan / schedule test */}
+        <View style={styles.actions}>
+          <TouchableOpacity
+            style={[styles.actionBtn, styles.actionBtnPrimary, !selectedCourseId && styles.actionBtnDisabled]}
+            onPress={openCreatePlan}
+            disabled={!selectedCourseId}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Create study plan"
+          >
+            <Ionicons name="sparkles" size={18} color={colors.white} />
+            <Text style={styles.actionBtnPrimaryText}>Create study plan</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actionBtn, styles.actionBtnOutline]}
+            onPress={() => setShowTestModal(true)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Schedule a test"
+          >
+            <Ionicons name="document-text-outline" size={18} color={colors.text} />
+            <Text style={styles.actionBtnOutlineText}>Schedule a test</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={{ height: insets.bottom + spacing.xl }} />
       </ScrollView>
 
-      <DayDetailModal
-        visible={showDaySheet}
-        onClose={() => setShowDaySheet(false)}
-        day={selectedDay}
-        month={calMonth}
-        year={calYear}
-        sessions={dayDetailSessions}
-        tests={dayDetailTests}
-        onSessionUpdate={() => sessionsQuery.refetch()}
-        planDefaultOf={planDefaultFor}
+      <SessionActionsSheet
+        session={actionSession}
+        onClose={() => setActionSession(null)}
+        onDone={() => actionSession && runSessionAction(actionSession.id, 'done')}
+        onSkip={() => actionSession && runSessionAction(actionSession.id, 'skipped')}
+        onEdit={openEditFromActions}
+        onDelete={() => actionSession && confirmDeleteSession(actionSession)}
+        busy={actionBusy}
+      />
+
+      <SessionEditSheet
+        visible={editSession !== null}
+        session={editSession}
+        daySessions={editDaySessions}
+        dayTests={editDayTests}
+        reminderSupport={reminderSupport}
+        planDefault={editSession ? planDefaultFor(editSession) : null}
+        onClose={() => setEditSession(null)}
+        onSaved={() => { setEditSession(null); sessionsQuery.refetch(); }}
+      />
+
+      <SessionChannelSheet
+        visible={channelSession !== null}
+        session={channelSession}
+        planDefault={channelSession ? planDefaultFor(channelSession) : null}
+        onClose={() => setChannelSession(null)}
+        onSaved={() => { setChannelSession(null); sessionsQuery.refetch(); }}
       />
 
       <ScheduleTestModal
@@ -637,238 +473,12 @@ export default function StudyTimetableScreen() {
   );
 }
 
-// ─── Day Detail Modal ─────────────────────────────────────────────────────────
-
-function DayDetailModal({
-  visible, onClose, day, month, year, sessions, tests, onSessionUpdate, planDefaultOf,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  day: number | null;
-  month: number;
-  year: number;
-  sessions: StudyTimetableSession[];
-  tests: SelfTest[];
-  onSessionUpdate: () => void;
-  planDefaultOf: (s: StudyTimetableSession) => ReminderChoice | null;
-}) {
-  const navigation = useNavigation<NavProp>();
-  const [loading, setLoading] = useState(false);
-  const [editingSession, setEditingSession] = useState<StudyTimetableSession | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editDuration, setEditDuration] = useState('');
-  const [editNotes, setEditNotes] = useState('');
-  const [editChannel, setEditChannel] = useState<ReminderChoice | null>(null);
-  const [channelSession, setChannelSession] = useState<StudyTimetableSession | null>(null);
-
-  function openEdit(s: StudyTimetableSession) {
-    setEditingSession(s);
-    setEditTitle(s.title);
-    setEditDuration(String(s.duration_minutes));
-    setEditNotes(s.notes ?? '');
-    setEditChannel(s.reminder_channel ?? null);
-  }
-
-  async function saveEdit() {
-    if (!editingSession) return;
-    setLoading(true);
-    try {
-      await patchSession(editingSession.id, {
-        title: editTitle.trim() || editingSession.title,
-        duration_minutes: parseInt(editDuration) || editingSession.duration_minutes,
-        notes: editNotes.trim() || null,
-        ...(canSetChannel(editingSession) ? { reminder_channel: editChannel } : {}),
-      });
-      setEditingSession(null);
-      onSessionUpdate();
-    } catch (e: any) {
-      Alert.alert('Error', e.message ?? 'Could not save edits');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleSessionAction(sessionId: string, action: 'done' | 'skipped' | 'delete') {
-    setLoading(true);
-    try {
-      if (action === 'delete') {
-        await deleteSession(sessionId);
-      } else {
-        await patchSession(sessionId, { status: action });
-      }
-      onSessionUpdate();
-    } catch (e: any) {
-      Alert.alert('Error', e.message ?? 'Action failed');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const dateLabel = day ? `${day} ${MONTH_NAMES[month].slice(0, 3)} ${year}` : '';
-
+function LegendItem({ color, label }: { color: string; label: string }) {
   return (
-    <>
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.sheetOverlay}>
-        <TouchableOpacity style={styles.sheetDismiss} onPress={onClose} activeOpacity={1} />
-        <View style={styles.sheetContainer}>
-          <View style={styles.sheetHandle} />
-          <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>{dateLabel}</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={22} color={colors.textSecondary} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Inline edit form */}
-          {editingSession && (
-            <ScrollView style={styles.editFormScroll} keyboardShouldPersistTaps="handled">
-            <View style={styles.editForm}>
-              <Text style={styles.editFormTitle}>Edit Session</Text>
-              <TextInput style={styles.input} value={editTitle} onChangeText={setEditTitle} placeholder="Title" placeholderTextColor={colors.textMuted} />
-              <TextInput style={styles.input} value={editDuration} onChangeText={setEditDuration} placeholder="Duration (min)" keyboardType="numeric" placeholderTextColor={colors.textMuted} />
-              <TextInput style={[styles.input, { height: 60 }]} value={editNotes} onChangeText={setEditNotes} placeholder="Notes (optional)" multiline placeholderTextColor={colors.textMuted} />
-              {canSetChannel(editingSession) && (
-                <>
-                  <Text style={styles.editChannelLabel}>Remind me by</Text>
-                  <ReminderChannelPicker value={editChannel} onChange={setEditChannel} disabled={loading} />
-                </>
-              )}
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity style={[styles.editSaveBtn, { flex: 1 }]} onPress={saveEdit} disabled={loading}>
-                  {loading ? <ActivityIndicator size="small" color={colors.white} /> : <Text style={styles.editSaveBtnText}>Save</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.editCancelBtn, { flex: 1 }]} onPress={() => setEditingSession(null)}>
-                  <Text style={styles.editCancelBtnText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-            </ScrollView>
-          )}
-
-          <ScrollView showsVerticalScrollIndicator={false}>
-            {sessions.length === 0 && tests.length === 0 && (
-              <View style={styles.sheetEmpty}>
-                <Ionicons name="calendar-outline" size={36} color={colors.textMuted} />
-                <Text style={styles.sheetEmptyText}>Nothing scheduled this day</Text>
-              </View>
-            )}
-
-            {sessions.length > 0 && (
-              <>
-                <Text style={styles.sheetSectionLabel}>Study Sessions</Text>
-                {sessions.map(s => {
-                  const statusColor =
-                    s.status === 'done' ? colors.success :
-                    s.status === 'skipped' ? colors.textMuted : colors.warning;
-                  const isSkipped = s.status === 'skipped';
-                  return (
-                    <View key={s.id} style={[styles.sessionRow, isSkipped && styles.sessionRowSkipped]}>
-                      <View style={[styles.sessionDot, { backgroundColor: statusColor }]} />
-                      <View style={styles.sessionInfo}>
-                        <Text style={[styles.sessionTitle, isSkipped && styles.skippedText]}>{s.title}</Text>
-                        <Text style={[styles.sessionMeta, isSkipped && styles.skippedText]}>
-                          {formatTime(s.scheduled_at)} · {s.duration_minutes} min
-                        </Text>
-                        {canSetChannel(s) && (() => {
-                          const ch = channelChipStyle(s.reminder_channel);
-                          return (
-                            <TouchableOpacity
-                              style={[styles.channelChip, { backgroundColor: ch.bg }]}
-                              onPress={() => setChannelSession(s)}
-                              disabled={loading}
-                              hitSlop={{ top: 6, bottom: 6 }}
-                              accessibilityRole="button"
-                              accessibilityLabel={`Reminder: ${ch.label}. Change`}
-                            >
-                              <Ionicons name={ch.icon as keyof typeof Ionicons.glyphMap} size={12} color={ch.fg} />
-                              <Text style={[styles.channelChipText, { color: ch.fg }]}>{ch.label}</Text>
-                              <Ionicons name="chevron-down" size={12} color={ch.fg} />
-                            </TouchableOpacity>
-                          );
-                        })()}
-                        {s.notes && <Text style={styles.sessionNotes}>{s.notes}</Text>}
-                        <View style={[styles.statusBadge, { backgroundColor: statusColor + '22' }]}>
-                          <Text style={[styles.statusBadgeText, { color: statusColor }]}>
-                            {s.status.charAt(0).toUpperCase() + s.status.slice(1)}
-                          </Text>
-                        </View>
-                      </View>
-                      <View style={styles.sessionActions}>
-                        {s.status === 'pending' && (
-                          <>
-                            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#DCFCE7' }]}
-                              onPress={() => handleSessionAction(s.id, 'done')} disabled={loading}>
-                              <Ionicons name="checkmark" size={14} color={colors.success} />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#FEF3C7' }]}
-                              onPress={() => handleSessionAction(s.id, 'skipped')} disabled={loading}>
-                              <Ionicons name="remove" size={14} color={colors.warning} />
-                            </TouchableOpacity>
-                          </>
-                        )}
-                        <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#EFF6FF' }]}
-                          onPress={() => openEdit(s)} disabled={loading}>
-                          <Ionicons name="pencil-outline" size={14} color="#3B82F6" />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#FEE2E2' }]}
-                          onPress={() => {
-                            Alert.alert('Delete Session', 'Delete this session?', [
-                              { text: 'Cancel', style: 'cancel' },
-                              { text: 'Delete', style: 'destructive', onPress: () => handleSessionAction(s.id, 'delete') },
-                            ]);
-                          }} disabled={loading}>
-                          <Ionicons name="trash-outline" size={14} color={colors.error} />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
-              </>
-            )}
-
-            {tests.length > 0 && (
-              <>
-                <Text style={styles.sheetSectionLabel}>Self Tests</Text>
-                {tests.map(t => (
-                  <View key={t.id} style={styles.testRow}>
-                    <View style={styles.testRowLeft}>
-                      <Text style={styles.testRowTitle}>{t.title}</Text>
-                      <Text style={styles.testRowMeta}>
-                        {formatTime(t.scheduled_at)} · {t.duration_minutes} min · {t.total_questions} Qs
-                      </Text>
-                      <View style={styles.testTypePill}>
-                        <Text style={styles.testTypePillText}>{t.test_type === 'topic' ? 'Topic Test' : 'Chapter Test'}</Text>
-                      </View>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.openTestBtn}
-                      onPress={() => {
-                        // Navigate to test-taking route if available; for now navigate to
-                        // MyCourses as a stub since the test-taking screen is out of scope
-                        onClose();
-                        (navigation as any).navigate('MainTabs', { screen: 'MyCourses' });
-                      }}
-                    >
-                      <Text style={styles.openTestBtnText}>Open</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </>
-            )}
-            <View style={{ height: 24 }} />
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-    <SessionChannelSheet
-      visible={channelSession !== null}
-      session={channelSession}
-      planDefault={channelSession ? planDefaultOf(channelSession) : null}
-      onClose={() => setChannelSession(null)}
-      onSaved={() => { setChannelSession(null); onSessionUpdate(); }}
-    />
-    </>
+    <View style={styles.legendItem}>
+      <View style={[styles.legendDot, { backgroundColor: color }]} />
+      <Text style={styles.legendText}>{label}</Text>
+    </View>
   );
 }
 
@@ -1195,14 +805,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 4, gap: spacing.sm,
   },
   headerTitle: { flex: 1, fontSize: fontSize.xl, fontFamily: fontFamily.heading, color: colors.white },
-  headerIconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  remindersPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    minHeight: 44, paddingHorizontal: spacing.md, borderRadius: borderRadius.full,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  remindersPillText: { fontSize: fontSize.md, fontFamily: fontFamily.semiBold, color: colors.white },
+  redDot: {
+    position: 'absolute', top: 8, right: 8, width: 10, height: 10, borderRadius: 5,
+    backgroundColor: colors.error, borderWidth: 1.5, borderColor: colors.white,
+  },
 
   body: { flex: 1 },
 
   chipStripWrapper: { backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.border },
   chipStrip: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.sm },
   chip: {
-    paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: borderRadius.full,
+    minHeight: 36, justifyContent: 'center',
+    paddingHorizontal: spacing.md, borderRadius: borderRadius.full,
     backgroundColor: colors.gray100, borderWidth: 1, borderColor: colors.border, maxWidth: 200,
   },
   chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
@@ -1210,251 +830,53 @@ const styles = StyleSheet.create({
   chipTextActive: { color: colors.white },
   emptyChipText: { padding: spacing.md, color: colors.textMuted, fontSize: fontSize.sm },
 
-  sectionHeaderRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: 4,
-  },
-  sectionTitle: { fontSize: fontSize.md, fontFamily: fontFamily.semiBold, color: colors.text, flex: 1 },
-  clearFilter: {
-    paddingHorizontal: 10, paddingVertical: 4, backgroundColor: '#EDE9FE', borderRadius: borderRadius.full,
-  },
-  clearFilterText: { fontSize: fontSize.xs, color: '#7C3AED', fontFamily: fontFamily.medium },
+  reminderWrap: { paddingHorizontal: spacing.md, paddingTop: spacing.md },
 
-  planStrip: { paddingHorizontal: spacing.md, paddingBottom: spacing.md, gap: spacing.sm },
-  planCard: { width: PLAN_CARD_WIDTH, borderRadius: borderRadius.lg, padding: spacing.md, gap: 6 },
-  planCardPurple: { backgroundColor: '#4C1D95' },
-  planCardAmber: { backgroundColor: '#78350F' },
-  planCardSelected: { borderWidth: 2.5, borderColor: '#C4B5FD' },
-  planCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  planCardActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  reminderRowWrap: { paddingHorizontal: spacing.md, marginBottom: spacing.sm },
-  modeBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: borderRadius.full },
-  modeBadgeAI: { backgroundColor: '#7C3AED' },
-  modeBadgeManual: { backgroundColor: '#5B21B6' },
-  modeBadgeText: { fontSize: fontSize.xs, color: colors.white, fontFamily: fontFamily.medium },
-  planCardTitle: { fontSize: fontSize.md, fontFamily: fontFamily.semiBold, color: '#EDE9FE' },
-  planCardTitleAmber: { fontSize: fontSize.md, fontFamily: fontFamily.semiBold, color: '#FEF3C7' },
-  planCardMeta: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  planCardMetaText: { fontSize: fontSize.xs, color: '#C4B5FD', fontFamily: fontFamily.regular },
-  planCardMetaTextAmber: { fontSize: fontSize.xs, color: '#FCD34D', fontFamily: fontFamily.regular },
-  testBadge: {
-    backgroundColor: '#D97706', borderRadius: borderRadius.full, paddingHorizontal: 8, paddingVertical: 3,
+  sectionHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    paddingHorizontal: spacing.md, paddingTop: spacing.lg, paddingBottom: spacing.sm,
   },
-  testBadgeText: { fontSize: fontSize.xs, color: colors.white, fontFamily: fontFamily.medium },
-  testTypeBadge: {
-    backgroundColor: '#B45309', borderRadius: borderRadius.full, paddingHorizontal: 8, paddingVertical: 3,
+  sectionTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text, flex: 1 },
+  clearFilter: {
+    minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing.md,
+    backgroundColor: colors.primaryLight + '33', borderRadius: borderRadius.full,
   },
-  testTypeBadgeText: { fontSize: fontSize.xs, color: '#FEF3C7', fontFamily: fontFamily.regular },
+  clearFilterText: { fontSize: fontSize.sm, color: colors.primaryDark, fontFamily: fontFamily.semiBold },
+
+  planStrip: { paddingHorizontal: spacing.md, paddingBottom: spacing.md, gap: spacing.md },
 
   emptyPlanCard: {
-    margin: spacing.md, padding: spacing.lg, backgroundColor: colors.white,
+    marginHorizontal: spacing.md, padding: spacing.lg, backgroundColor: colors.white,
     borderRadius: borderRadius.lg, alignItems: 'center', gap: spacing.sm,
     borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
   },
   emptyPlanText: {
-    fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center', fontFamily: fontFamily.regular,
+    fontSize: fontSize.md, lineHeight: 22, color: colors.textSecondary, textAlign: 'center', fontFamily: fontFamily.regular,
   },
 
   // Calendar
-  calendarCard: {
-    margin: spacing.md, backgroundColor: colors.white,
-    borderRadius: borderRadius.lg, overflow: 'hidden',
-    borderWidth: 1, borderColor: colors.border,
-  },
-  calNavRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  calNavBtn: { padding: 4 },
-  calMonthTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text },
-  calDayHeaders: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.border },
-  calDayHeader: {
-    width: CAL_CELL_SIZE, textAlign: 'center', fontSize: fontSize.xs,
-    fontFamily: fontFamily.medium, color: colors.textMuted, paddingVertical: 6,
-  },
-  calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  calCell: {
-    width: CAL_CELL_SIZE,
-    minHeight: CAL_CELL_SIZE + 14,
-    borderWidth: 0.5,
-    borderColor: colors.border,
-    padding: 3,
-    alignItems: 'flex-start',
-  },
-  calCellEmpty: { backgroundColor: colors.gray50 },
-  calCellToday: { borderColor: colors.primary, borderWidth: 2, backgroundColor: '#F0FDF4' },
-  calDayNum: { fontSize: fontSize.xs, fontFamily: fontFamily.semiBold, color: colors.text, marginBottom: 2 },
-  calDayNumToday: { color: colors.primary },
-  sessionBadge: {
-    backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 4, paddingVertical: 1, marginBottom: 2,
-  },
-  sessionBadgeText: { fontSize: 8, color: colors.white, fontFamily: fontFamily.bold },
-  calSessionTitle: { fontSize: 8, color: colors.textSecondary, fontFamily: fontFamily.regular, width: '100%' },
-  calSkippedText: { fontSize: 8, color: colors.textMuted, fontFamily: fontFamily.regular, opacity: 0.5, width: '100%' },
-  calDoneText: { fontSize: 8, color: colors.success, fontFamily: fontFamily.medium },
-  // Amber glow pill: pulsing border + background (animated with useNativeDriver:false)
-  amberGlowPill: {
-    width: '90%', height: 5, borderRadius: 3, borderWidth: 1.5,
-    marginTop: 2, alignSelf: 'center',
-  },
-
-  // Legend
+  calendarWrap: { marginHorizontal: spacing.md, marginTop: spacing.sm },
   legend: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm,
-    paddingHorizontal: spacing.md, paddingBottom: spacing.md,
+    flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
   },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: { fontSize: fontSize.xs, color: colors.textSecondary, fontFamily: fontFamily.regular },
+  legendText: { fontSize: fontSize.sm, color: colors.textSecondary, fontFamily: fontFamily.medium },
 
-  // Action card (Time Table / Schedule Test tabs)
-  actionCard: {
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.md,
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.sm,
-  },
-  tabBar: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    backgroundColor: colors.gray100,
-    borderRadius: borderRadius.md,
-    padding: 4,
-  },
-  tabBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.sm,
-  },
-  tabBtnActive: {
-    backgroundColor: colors.white,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  tabBtnText: { fontSize: fontSize.sm, color: colors.textMuted, fontFamily: fontFamily.medium },
-  tabBtnTextActive: { color: colors.text, fontFamily: fontFamily.semiBold },
+  dayWrap: { marginHorizontal: spacing.md, marginTop: spacing.xs },
 
-  wizardCard: {
-    marginTop: spacing.sm,
-    borderWidth: 1.5,
-    borderColor: colors.primary,
-    borderStyle: 'dashed',
-    borderRadius: borderRadius.lg,
-    backgroundColor: '#F0FDF4',
-    padding: spacing.lg,
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  wizardIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#DCFCE7',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  wizardCardTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text, textAlign: 'center' },
-  wizardCardSubtitle: {
-    fontSize: fontSize.sm, color: colors.textSecondary, fontFamily: fontFamily.regular,
-    textAlign: 'center', lineHeight: 20,
-  },
-  wizardCardBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: colors.primary, borderRadius: borderRadius.md,
-    paddingHorizontal: spacing.lg, paddingVertical: spacing.sm + 2, marginTop: 4,
-  },
-  wizardCardBtnText: { fontSize: fontSize.md, color: colors.white, fontFamily: fontFamily.semiBold },
-
-  // Day Detail Sheet
-  sheetOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
-  sheetDismiss: { flex: 1 },
-  sheetContainer: {
-    backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    padding: spacing.md, maxHeight: '85%',
-  },
-  sheetHandle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border,
-    alignSelf: 'center', marginBottom: spacing.md,
-  },
-  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
-  sheetTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.heading, color: colors.text },
-  sheetSectionLabel: {
-    fontSize: fontSize.sm, fontFamily: fontFamily.semiBold, color: colors.textSecondary,
-    marginTop: spacing.sm, marginBottom: 4,
-  },
-  sheetEmpty: { alignItems: 'center', paddingVertical: spacing.xl, gap: spacing.sm },
-  sheetEmptyText: { fontSize: fontSize.sm, color: colors.textMuted, fontFamily: fontFamily.regular },
-
-  // Edit form
-  editForm: {
-    backgroundColor: '#F0F9FF', borderRadius: borderRadius.md, padding: spacing.sm,
-    marginBottom: spacing.sm, gap: 6, borderWidth: 1, borderColor: '#BAE6FD',
-  },
-  editFormTitle: { fontSize: fontSize.sm, fontFamily: fontFamily.semiBold, color: '#0369A1', marginBottom: 4 },
-  editFormScroll: { flexGrow: 0, maxHeight: 460, marginBottom: spacing.sm },
-  editChannelLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.semiBold, color: colors.text, marginTop: 4 },
-  channelChip: {
-    alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4,
-    height: 32, paddingHorizontal: 12, borderRadius: 16, marginTop: 4,
-  },
-  channelChipText: { fontSize: fontSize.sm, fontFamily: fontFamily.medium },
-  editSaveBtn: {
-    backgroundColor: colors.primary, borderRadius: borderRadius.sm, padding: 10, alignItems: 'center',
-  },
-  editSaveBtnText: { fontSize: fontSize.sm, color: colors.white, fontFamily: fontFamily.semiBold },
-  editCancelBtn: {
-    backgroundColor: colors.gray100, borderRadius: borderRadius.sm, padding: 10, alignItems: 'center',
-    borderWidth: 1, borderColor: colors.border,
-  },
-  editCancelBtnText: { fontSize: fontSize.sm, color: colors.textSecondary, fontFamily: fontFamily.medium },
-
-  // Session row
-  sessionRow: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
-    paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  sessionRowSkipped: { opacity: 0.55 },
-  sessionDot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
-  sessionInfo: { flex: 1, gap: 4 },
-  sessionTitle: { fontSize: fontSize.md, fontFamily: fontFamily.medium, color: colors.text },
-  skippedText: { textDecorationLine: 'line-through', color: colors.textMuted },
-  sessionMeta: { fontSize: fontSize.xs, color: colors.textSecondary },
-  sessionNotes: { fontSize: fontSize.xs, color: colors.textMuted, fontStyle: 'italic' },
-  statusBadge: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: borderRadius.full },
-  statusBadgeText: { fontSize: fontSize.xs, fontFamily: fontFamily.medium },
-  sessionActions: { flexDirection: 'row', gap: 4, alignItems: 'center', flexWrap: 'wrap' },
+  // Create plan / schedule test buttons
+  actions: { marginHorizontal: spacing.md, marginTop: spacing.lg, gap: spacing.sm },
   actionBtn: {
-    width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
+    minHeight: 52, borderRadius: borderRadius.md, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
   },
-
-  // Test row in sheet
-  testRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  testRowLeft: { flex: 1, gap: 4 },
-  testRowTitle: { fontSize: fontSize.md, fontFamily: fontFamily.medium, color: colors.text },
-  testRowMeta: { fontSize: fontSize.xs, color: colors.textSecondary },
-  testTypePill: {
-    alignSelf: 'flex-start', backgroundColor: '#FEF3C7',
-    borderRadius: borderRadius.full, paddingHorizontal: 8, paddingVertical: 2,
-  },
-  testTypePillText: { fontSize: fontSize.xs, color: '#D97706', fontFamily: fontFamily.medium },
-  openTestBtn: {
-    backgroundColor: colors.primary, borderRadius: borderRadius.sm, paddingHorizontal: spacing.md, paddingVertical: 8,
-  },
-  openTestBtnText: { fontSize: fontSize.sm, color: colors.white, fontFamily: fontFamily.semiBold },
+  actionBtnPrimary: { backgroundColor: colors.primary },
+  actionBtnDisabled: { opacity: 0.5 },
+  actionBtnPrimaryText: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.white },
+  actionBtnOutline: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+  actionBtnOutlineText: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text },
 
   // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
@@ -1537,6 +959,4 @@ const styles = StyleSheet.create({
 
   // SimpleSelect
   errorText: { fontSize: fontSize.sm, color: colors.error, marginTop: 4, fontFamily: fontFamily.regular },
-
-  // Wizard progress
 });

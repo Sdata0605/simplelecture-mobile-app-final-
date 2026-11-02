@@ -183,9 +183,33 @@ export function useSelfTests(courseId: string | null) {
   );
 }
 
+/** Columns the session editor may change. The three *_sent_at columns are set to null when the start time moves, so reminders can fire again. */
+export type SessionPatch = Partial<Pick<
+  StudyTimetableSession,
+  'status' | 'notes' | 'title' | 'duration_minutes' | 'reminder_channel' | 'scheduled_at'
+>> & {
+  reminder_sent_at?: string | null;
+  reminder_24h_sent_at?: string | null;
+  reminder_1h_sent_at?: string | null;
+};
+
+export type DaySessionSummary = Pick<
+  StudyTimetableSession,
+  'id' | 'title' | 'scheduled_at' | 'duration_minutes' | 'status' | 'session_type'
+>;
+
+/** All of this student's sessions (every course and plan) in [fromIso, toIso). RLS limits rows to the signed-in student. */
+export async function fetchDaySessions(fromIso: string, toIso: string): Promise<DaySessionSummary[]> {
+  return restFetch<DaySessionSummary>(
+    `study_timetable_sessions?select=id,title,scheduled_at,duration_minutes,status,session_type` +
+    `&scheduled_at=gte.${encodeURIComponent(fromIso)}&scheduled_at=lt.${encodeURIComponent(toIso)}` +
+    `&order=scheduled_at.asc`
+  );
+}
+
 export async function patchSession(
   sessionId: string,
-  patch: Partial<Pick<StudyTimetableSession, 'status' | 'notes' | 'title' | 'duration_minutes' | 'reminder_channel'>>
+  patch: SessionPatch
 ): Promise<void> {
   const headers = await authHeaders();
   const res = await fetch(

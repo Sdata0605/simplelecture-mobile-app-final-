@@ -67,6 +67,8 @@ interface ReminderChannelPickerProps {
   emailDisabledReason?: string;
   /** Shows a small "Recommended" pill on this channel (list layout). */
   recommended?: ReminderChoice;
+  /** Only these choices are shown (runtime support check). Omit to show every channel. */
+  allowed?: ReminderChoice[];
 }
 
 export default function ReminderChannelPicker({
@@ -78,8 +80,11 @@ export default function ReminderChannelPicker({
   noneLabel,
   emailDisabledReason,
   recommended,
+  allowed,
 }: ReminderChannelPickerProps) {
   const isList = layout === 'list';
+  const visibleChannels = allowed ? CHANNELS.filter(c => allowed.includes(c.value)) : CHANNELS;
+  const showNone = allowNone && (allowed ? allowed.includes('none') : true);
   // Grid callers keep the legacy null; list callers write the explicit 'none'.
   const noneValue: ReminderChoice | null = isList ? 'none' : null;
   const noneText = noneLabel ?? (isList ? 'No reminders' : 'No reminder');
@@ -88,7 +93,7 @@ export default function ReminderChannelPicker({
   return (
     <View>
       <View style={isList ? styles.list : styles.grid} accessibilityRole="radiogroup">
-        {CHANNELS.map(c => {
+        {visibleChannels.map(c => {
           const selected = c.value === value;
           const isEmail = c.value === 'email';
           const tileDisabled = !!disabled || (isEmail && !!emailDisabledReason);
@@ -162,7 +167,7 @@ export default function ReminderChannelPicker({
         })}
       </View>
 
-      {allowNone ? (
+      {showNone ? (
         <TouchableOpacity
           onPress={() => onChange(noneValue)}
           disabled={disabled}

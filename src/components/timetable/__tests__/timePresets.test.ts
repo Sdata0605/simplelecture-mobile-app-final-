@@ -1,7 +1,7 @@
 import {
   PRESETS, WEEKDAY_DEFAULT, WEEKEND_DEFAULT, WINDOW_KEYS,
   dayMinutes, format12, formatHours, formatRange12, hasWeekdayStudyTime, keepRangeValid,
-  normalizeTime, presetIdFor, roundToQuarter, timeKeyFromParts, toDayPlan, toMinutes,
+  minutesToTime, normalizeTime, presetIdFor, timeKeyFromParts, toDayPlan, toMinutes,
   validateDay, validateWindow, weeklyMinutes,
   type DayWindows, type TimeWindow,
 } from '../planWizard/timePresets';
@@ -53,10 +53,15 @@ describe('time value normalisation (typed or picked values become HH:MM)', () =>
     expect(dayMinutes(day(win(start, end), OFF, OFF))).toBe(120);
   });
 
-  it('rounds picked times to 15 minutes and keeps them inside the day', () => {
-    expect(roundToQuarter(7 * 60 + 7)).toBe(420);
-    expect(roundToQuarter(7 * 60 + 8)).toBe(435);
-    expect(roundToQuarter(23 * 60 + 59)).toBe(1425);
+  it('keeps any picked minute, with no rounding to 15 minutes', () => {
+    expect(timeKeyFromParts(7, 7)).toBe('07:07');
+    expect(timeKeyFromParts(7, 42)).toBe('07:42');
+    expect(timeKeyFromParts(23, 59)).toBe('23:59');
+  });
+
+  it('minutesToTime reaches 23:59 and clamps above it', () => {
+    expect(minutesToTime(23 * 60 + 59)).toBe('23:59');
+    expect(minutesToTime(24 * 60 + 5)).toBe('23:59');
   });
 });
 
@@ -192,8 +197,14 @@ describe('custom range auto-correction', () => {
     expect(keepRangeValid('07:00', '09:00')).toEqual({ start: '07:00', end: '09:00' });
   });
 
-  it('caps To at 23:45 and keeps the range valid', () => {
-    expect(keepRangeValid('23:30', '23:00')).toEqual({ start: '23:30', end: '23:45' });
-    expect(keepRangeValid('23:45', '23:00')).toEqual({ start: '23:30', end: '23:45' });
+  it('caps To at 23:59 and keeps the range valid', () => {
+    expect(keepRangeValid('23:30', '23:00')).toEqual({ start: '23:30', end: '23:59' });
+    expect(keepRangeValid('23:45', '23:00')).toEqual({ start: '23:45', end: '23:59' });
+    expect(keepRangeValid('23:59', '23:00')).toEqual({ start: '23:29', end: '23:59' });
+  });
+
+  it('any-minute windows are valid: 07:07 to 07:37 is 30 minutes, 07:07 to 07:36 is too short', () => {
+    expect(validateWindow('07:07', '07:37')).toBeNull();
+    expect(validateWindow('07:07', '07:36')).toBe('Make it at least 30 minutes');
   });
 });

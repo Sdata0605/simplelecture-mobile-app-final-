@@ -46,7 +46,7 @@ export const PRESETS: Record<WindowKey, readonly TimePreset[]> = {
 };
 
 export const MIN_WINDOW_MINUTES = 30;
-const LAST_MINUTE = 23 * 60 + 45; // 23:45, the latest time the pickers can give
+const LAST_MINUTE = 23 * 60 + 59; // 23:59, the latest time the any-minute pickers can give
 
 export const WEEKDAY_DEFAULT: DayWindows = {
   morning: { enabled: true, start: '07:00', end: '09:00', presetId: 'm-7-9' },
@@ -92,12 +92,6 @@ export function toMinutes(time: string): number | null {
 export function minutesToTime(total: number): string {
   const clamped = Math.min(Math.max(Math.round(total), 0), LAST_MINUTE);
   return timeKeyFromParts(Math.floor(clamped / 60), clamped % 60);
-}
-
-/** Rounds minutes to the nearest 15 and keeps the result inside 00:00 to 23:45. */
-export function roundToQuarter(total: number): number {
-  const r = Math.round(total / 15) * 15;
-  return Math.min(Math.max(r, 0), LAST_MINUTE);
 }
 
 export function presetIdFor(key: WindowKey, start: string, end: string): string | null {
@@ -219,8 +213,8 @@ export function formatHours(minutes: number): string {
 }
 
 /**
- * If a From time was just set and it is not before To, move To to From + 1 hour (capped at 23:45).
- * If that is still not possible (From is 23:45), From becomes 23:30 and To becomes 23:45.
+ * If a From time was just set and it is not before To, move To to From + 1 hour (capped at 23:59).
+ * If that is still not possible (From is 23:59), From becomes 23:29 and To becomes 23:59, so the window is 30 minutes.
  */
 export function keepRangeValid(start: string, end: string): { start: string; end: string } {
   const s = toMinutes(start);
@@ -228,7 +222,7 @@ export function keepRangeValid(start: string, end: string): { start: string; end
   if (s === null || e === null || e > s) return { start, end };
   const newEnd = Math.min(s + 60, LAST_MINUTE);
   if (newEnd > s) return { start, end: minutesToTime(newEnd) };
-  return { start: minutesToTime(LAST_MINUTE - 15), end: minutesToTime(LAST_MINUTE) };
+  return { start: minutesToTime(LAST_MINUTE - MIN_WINDOW_MINUTES), end: minutesToTime(LAST_MINUTE) };
 }
 
 /**

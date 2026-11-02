@@ -8,7 +8,6 @@ import { RouteProp, ParamListBase, useNavigation, useRoute } from '@react-naviga
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontFamily, borderRadius, spacing } from '../constants/theme';
-import { FEATURES } from '../constants/featureFlags';
 import { KeyboardShiftView } from '../components/keyboard/keyboardStick';
 import WizardHeader from '../components/timetable/planWizard/WizardHeader';
 import WizardBottomBar from '../components/timetable/planWizard/WizardBottomBar';
@@ -25,8 +24,11 @@ import {
 import { useSubjectsForCourse, useChaptersForSubject, useTopicsForChapter, useScopeContent } from '../hooks/useScopeContent';
 import { evaluateFeasibility, generatePlan, GenerateResult } from '../services/studyPlanApi';
 import { applyPlanChannel } from '../services/timetableReminders';
+import { setCourseRemindersOff } from '../services/localReminderPrefs';
+import { scheduleStudyReminders } from '../services/scheduledNotifications';
 import { useAuth } from '../context/AuthContext';
 import { useReminderPermissions } from '../hooks/useReminderPermissions';
+import { probeReminderSupport, useTimetableReminderSupport } from '../hooks/useTimetableReminderSupport';
 import { TINT } from '../components/reminders/palette';
 
 export type StudyPlanCreateParams = { StudyPlanCreate: { courseId: string; courseName: string } };
@@ -36,9 +38,11 @@ export default function StudyPlanCreateScreen() {
   const route = useRoute<RouteProp<StudyPlanCreateParams, 'StudyPlanCreate'>>();
   const courseId = route.params?.courseId ?? null;
   const courseName = route.params?.courseName ?? '';
-  const remindersOn = FEATURES.timetableReminders;
+  // The reminder step is always part of the wizard (plan F.2). Which channels it offers comes from the runtime check.
+  const remindersOn = true;
   const { user } = useAuth();
   const perms = useReminderPermissions();
+  const support = useTimetableReminderSupport();
 
   const [state, dispatch] = useReducer(
     wizardReducer,
@@ -191,8 +195,16 @@ export default function StudyPlanCreateScreen() {
       let channelFailed = false;
       if (remindersOn && state.reminder !== null) {
         try {
-          if (!res.timetable_id) throw new Error('missing timetable_id');
-          await applyPlanChannel(res.timetable_id, state.reminder);
+          // Probe again at save time (cached for 12 h) so the choice matches what the server can store.
+          const mode = await probeReminderSupport();
+          if (mode.status === 'full') {
+            if (!res.timetable_id) throw new Error('missing timetable_id');
+            await applyPlanChannel(res.timetable_id, state.reminder);
+          } else if (courseId) {
+            // Basic mode: the choice lives on this phone. 'none' means No reminders for this course.
+            await setCourseRemindersOff(courseId, state.reminder === 'none');
+            await scheduleStudyReminders();
+          }
         } catch {
           channelFailed = true;
         }
@@ -262,6 +274,7 @@ export default function StudyPlanCreateScreen() {
         return (
           <StepReminder
             value={state.reminder}
+            channels={support.channels}
             onChange={value => dispatch({ type: 'setReminder', value })}
             hasEmail={!!user?.email}
             permission={perms.notifications}
@@ -321,15 +334,13 @@ export default function StudyPlanCreateScreen() {
           <TouchableOpacity style={styles.primaryBtn} onPress={exitScreen} accessibilityRole="button">
             <Text style={styles.primaryBtnText}>View timetable</Text>
           </TouchableOpacity>
-          {remindersOn && (
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={() => navigation.replace('TimetableReminderSettings', { courseId })}
-              accessibilityRole="button"
-            >
-              <Text style={styles.secondaryBtnText}>Reminder settings</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={() => navigation.replace('TimetableReminderSettings', { courseId })}
+            accessibilityRole="button"
+          >
+            <Text style={styles.secondaryBtnText}>Reminder settings</Text>
+          </TouchableOpacity>
         </ScrollView>
       ) : (
         <>

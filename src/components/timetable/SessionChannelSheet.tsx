@@ -38,13 +38,15 @@ interface ChannelOptionsProps {
   value: ReminderChoice | null;
   onChange(v: ReminderChoice): void;
   disabled?: boolean;
+  /** Only these choices are shown (runtime support check). Omit to show every row. */
+  allowed?: ReminderChoice[];
 }
 
 /** Full-width channel cards (radio list). Used for the plan default and for a single session. */
-export function ChannelOptions({ value, onChange, disabled }: ChannelOptionsProps) {
+export function ChannelOptions({ value, onChange, disabled, allowed }: ChannelOptionsProps) {
   return (
     <View accessibilityRole="radiogroup" style={styles.list}>
-      {ROWS.map(r => {
+      {ROWS.filter(r => !allowed || allowed.includes(r.value)).map(r => {
         const selected = r.value === value;
         return (
           <TouchableOpacity
@@ -88,9 +90,10 @@ interface SessionChannelSheetProps {
   planDefault: ReminderChoice | 'mixed' | null;
   onClose(): void;
   onSaved(prev: ReminderChoice | null, next: ReminderChoice | null): void;
+  allowed?: ReminderChoice[];
 }
 
-export default function SessionChannelSheet({ visible, session, planDefault, onClose, onSaved }: SessionChannelSheetProps) {
+export default function SessionChannelSheet({ visible, session, planDefault, onClose, onSaved, allowed }: SessionChannelSheetProps) {
   const insets = useSafeAreaInsets();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,7 +132,7 @@ export default function SessionChannelSheet({ visible, session, planDefault, onC
           </Text>
         ) : null}
 
-        <ChannelOptions value={current} onChange={pick} disabled={saving} />
+        <ChannelOptions value={current} onChange={pick} disabled={saving} allowed={allowed} />
 
         {defaultValue ? (
           <TouchableOpacity

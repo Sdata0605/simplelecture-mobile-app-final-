@@ -304,9 +304,8 @@ export default function AppNavigator() {
         <Stack.Screen name="CoursePreview" component={CoursePreviewScreen} />
         <Stack.Screen name="StudyTimetable" component={StudyTimetableScreen} />
         <Stack.Screen name="StudyPlanCreate" component={StudyPlanCreateScreen} />
-        {FEATURES.timetableReminders && (
-          <Stack.Screen name="TimetableReminderSettings" component={TimetableReminderSettingsScreen} />
-        )}
+        {/* Always registered: the header, reminder card and wizard step navigate here in every build. */}
+        <Stack.Screen name="TimetableReminderSettings" component={TimetableReminderSettingsScreen} />
         <Stack.Screen name="MyTests" component={MyTestsScreen} />
         <Stack.Screen name="MyTestTake" component={MyTestTakeScreen} />
         <Stack.Screen name="MyTestResult" component={MyTestResultScreen} />

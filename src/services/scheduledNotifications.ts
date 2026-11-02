@@ -5,6 +5,13 @@ import Constants from 'expo-constants';
 import { SUPABASE_URL as SB_PROXY_URL, SUPABASE_ANON_KEY as SB_ANON_KEY, AUTH_TOKEN_KEY, getValidAccessToken } from './supabase';
 import { FEATURES } from '../constants/featureFlags';
 import { syncReminders, clearRemindersOnLogout } from './reminders';
+import { readSupportCache, getOffCourseIds } from './localReminderPrefs';
+
+/** True only when the last runtime probe found the reminder_channel column. Unknown counts as not supported. */
+async function isServerChannelSupported(): Promise<boolean> {
+  const cached = await readSupportCache();
+  return cached?.status === 'full';
+}
 
 const WELCOME_SHOWN_KEY = 'welcome_notification_shown';
 const LOGIN_WELCOME_LAST_KEY = 'login_welcome_last_sent';
@@ -278,6 +285,31 @@ interface StudyReminderSession {
   title: string | null;
   scheduled_at: string;
   status: string;
+  timetable_id?: string;
+}
+
+/** Plans whose course is switched off on this phone (basic mode only). Empty when the server stores the channel. */
+async function fetchLocallyOffPlanIds(courseIds: string[]): Promise<Set<string>> {
+  if (courseIds.length === 0) return new Set();
+  try {
+    const token = await getValidAccessToken();
+    const url =
+      `${SB_PROXY_URL}/rest/v1/study_timetables` +
+      `?select=id,course_id&course_id=in.(${courseIds.join(',')})`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        apikey: SB_ANON_KEY,
+        Authorization: `Bearer ${token ?? SB_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!res.ok) return new Set();
+    const rows = await res.json();
+    return new Set(Array.isArray(rows) ? rows.map((r: { id: string }) => r.id) : []);
+  } catch {
+    return new Set();
+  }
 }
 
 const studyReminderTitles = [
@@ -326,11 +358,11 @@ async function fetchUpcomingStudySessions(): Promise<StudyReminderSession[]> {
     const now = new Date().toISOString();
     const windowEnd = new Date(Date.now() + STUDY_REMINDER_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
     // Sessions with a timetable reminder channel are reminded by the new channel, not this legacy alarm.
-    // Only when the flag is on: the reminder_channel column may not exist on older servers.
-    const channelFilter = FEATURES.timetableReminders ? `&reminder_channel=is.null` : '';
+    // Only when the server really has the column (runtime check, cached); a missing column makes PostgREST return 400.
+    const channelFilter = (await isServerChannelSupported()) ? `&reminder_channel=is.null` : '';
     const url =
       `${SB_PROXY_URL}/rest/v1/study_timetable_sessions` +
-      `?select=id,title,scheduled_at,status` +
+      `?select=id,title,scheduled_at,status,timetable_id` +
       `&status=eq.pending&scheduled_at=gte.${now}&scheduled_at=lte.${windowEnd}` +
       channelFilter +
       `&order=scheduled_at.asc`;
@@ -375,8 +407,16 @@ export async function scheduleStudyReminders(): Promise<void> {
 
     const sessions = await fetchUpcomingStudySessions();
     const nowMs = Date.now();
+    // Basic mode keeps "No reminders" on the phone, so skip sessions of those courses.
+    // In full mode the server stores it per session, so the local flag is ignored.
+    let locallyOff = new Set<string>();
+    if (!(await isServerChannelSupported())) {
+      const offCourses = await getOffCourseIds();
+      locallyOff = await fetchLocallyOffPlanIds(offCourses);
+    }
     const valid = sessions
       .filter(s => s.status === 'pending')
+      .filter(s => !s.timetable_id || !locallyOff.has(s.timetable_id))
       .map(s => ({ session: s, fire: new Date(s.scheduled_at) }))
       .filter(s => !isNaN(s.fire.getTime()) && s.fire.getTime() > nowMs)
       .sort((a, b) => a.fire.getTime() - b.fire.getTime())

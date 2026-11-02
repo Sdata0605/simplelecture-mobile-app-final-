@@ -15,6 +15,8 @@ module.exports = {
     ],
   },
   moduleNameMapper: {
+    // babel-preset-expo inlines EXPO_PUBLIC_* values through this module.
+    '^expo/virtual/env$': '<rootDir>/src/services/__tests__/expoEnvMock.js',
     '^@react-native-async-storage/async-storage$':
       '<rootDir>/src/services/__tests__/asyncStorageMock.ts',
   },

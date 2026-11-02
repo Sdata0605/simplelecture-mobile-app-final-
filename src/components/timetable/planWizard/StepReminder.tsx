@@ -14,6 +14,8 @@ interface StepReminderProps {
   permission: 'granted' | 'denied' | 'undetermined';
   exactAlarmOk: boolean;
   onOpenSettings: () => void;
+  /** Channels the runtime support check allows (basic mode: Notification and Off). */
+  channels?: ReminderChoice[];
 }
 
 export function StepReminder({
@@ -23,6 +25,7 @@ export function StepReminder({
   permission,
   exactAlarmOk,
   onOpenSettings,
+  channels,
 }: StepReminderProps) {
   const isSound = value === 'call' || value === 'message' || value === 'notification';
   // Both gates are false until a choice exists, so no banner shows on the untouched step.
@@ -38,6 +41,7 @@ export function StepReminder({
         layout="list"
         allowNone
         value={value}
+        allowed={channels}
         onChange={v => {
           if (v) onChange(v);
         }}
