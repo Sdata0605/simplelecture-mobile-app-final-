@@ -22,6 +22,10 @@ import V5KeyPointsOverlay from '../components/v5/V5KeyPointsOverlay';
 import V5SectionProgress from '../components/v5/V5SectionProgress';
 import { AskAIAssistant } from '../components/askAssistant/AskAIAssistant';
 import { useTeacherSubject } from '../hooks/useTeacherSubject';
+import { useEndOfLecturePrompt } from '../hooks/useEndOfLecturePrompt';
+import { useAuth } from '../context/AuthContext';
+import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
+import V5EndAskPrompt from '../components/v5/V5EndAskPrompt';
 import { buildAskContext } from '../services/askAssistant/lectureContext';
 import type { LectureAskContext } from '../services/askAssistant/lectureLesson';
 import { openAskAI } from '../services/askAIStore';
@@ -88,7 +92,11 @@ export default function V5PlayerScreen() {
   // "Ask AI": the student talks to the live AI Teacher, which can teach any subject whose lectures are indexed.
   // Until the list loads, or if it fails, the player simply has no Ask AI button.
   const teacherSubject = useTeacherSubject(subjectId);
+  const { user, isAuthenticated } = useAuth();
+  const { hasActivePlan } = useAITeacherSubscription();
   const [askAIOpen, setAskAIOpen] = useState(false);
+  // Which opening the Ask AI screen uses: 'mid' (sparkle button) or 'end' (after the end-of-lecture card).
+  const [askTrigger, setAskTrigger] = useState<'mid' | 'end'>('mid');
   // Where the lecture was when Ask AI was tapped, so the teacher can answer in context.
   const [askContext, setAskContext] = useState<LectureAskContext | null>(null);
   // Ask AI is a landscape screen; remember whether the player was already in landscape (fullscreen) to restore it.
@@ -114,6 +122,17 @@ export default function V5PlayerScreen() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [keyPointsHidden, setKeyPointsHidden] = useState(false);
   const [activeQuickAction, setActiveQuickAction] = useState<string | null>(null);
+
+  // End-of-lecture "Ask AI" card. Only with an AI Teacher subject and an active plan, never for live classes,
+  // and it waits while Ask AI or the notes panel is open.
+  const isLive = (route.params as { context?: string }).context === 'live';
+  const endPrompt = useEndOfLecturePrompt({
+    userId: user?.id,
+    jobId,
+    available: !!teacherSubject && isAuthenticated && hasActivePlan,
+    busy: askAIOpen || notesOpen,
+    isLive,
+  });
 
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seekWidthRef = useRef(1);
@@ -300,9 +319,10 @@ export default function V5PlayerScreen() {
       const target = Math.max(0, Math.min(durationMillis, millis));
       setPositionMillis(target);
       videoRef.current?.setPositionAsync(target).catch(() => {});
+      endPrompt.decline();
       showControls();
     },
-    [durationMillis, showControls],
+    [durationMillis, showControls, endPrompt.decline],
   );
 
   const handleSeekPress = useCallback(
@@ -315,12 +335,13 @@ export default function V5PlayerScreen() {
   );
 
   const handleReplay = useCallback(() => {
+    endPrompt.decline();
     setPositionMillis(0);
     videoRef.current?.setPositionAsync(0).catch(() => {});
     videoRef.current?.playAsync().catch(() => {});
     setIsPlaying(true);
     showControls();
-  }, [showControls]);
+  }, [showControls, endPrompt.decline]);
 
   const toggleMute = useCallback(() => {
     setIsMuted((muted) => !muted);
@@ -334,6 +355,7 @@ export default function V5PlayerScreen() {
   const handleAskAI = useCallback(() => {
     if (!teacherSubject) return;
     resumeAfterAskRef.current = isPlaying;
+    setAskTrigger('mid');
     videoRef.current?.pauseAsync().catch(() => {});
     setIsPlaying(false);
     setAskContext(buildAskContext(timeline, position.active, positionMillis / 1000, durationMillis / 1000));
@@ -346,6 +368,7 @@ export default function V5PlayerScreen() {
   const handleCloseAskAI = useCallback(() => {
     setAskAIOpen(false);
     setAskContext(null);
+    setAskTrigger('mid');
     // Back to how the player was: portrait, unless it was already in landscape fullscreen.
     if (!askWasFullscreenRef.current) {
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
@@ -373,6 +396,26 @@ export default function V5PlayerScreen() {
     else openAskAI({ subjectId, topicTitle: title });
   }, [teacherSubject, handleAskAI, subjectId, title]);
 
+  // "Yes, ask away" on the end card: same screen as the sparkle button, but opened with the 'end' opening.
+  // Never resumes playback (the lecture is finished), and the card is hidden before the orientation changes.
+  const openEndAskAI = useCallback(() => {
+    if (!teacherSubject) return;
+    resumeAfterAskRef.current = false;
+    setAskTrigger('end');
+    setAskContext(null);
+    videoRef.current?.pauseAsync().catch(() => {});
+    setIsPlaying(false);
+    askWasFullscreenRef.current = isFullscreen;
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
+    setAskAIOpen(true);
+    showControls();
+  }, [teacherSubject, isFullscreen, showControls]);
+
+  const handleEndAskYes = useCallback(() => {
+    endPrompt.accept();
+    openEndAskAI();
+  }, [endPrompt.accept, openEndAskAI]);
+
   const cycleSpeed = useCallback(() => {
     setPlaybackRate((rate) => {
       const next = SPEEDS[(SPEEDS.indexOf(rate) + 1) % SPEEDS.length];
@@ -389,7 +432,8 @@ export default function V5PlayerScreen() {
     setPositionMillis(status.positionMillis);
     setDurationMillis(status.durationMillis ?? 0);
     setIsPlaying(status.isPlaying);
-  }, []);
+    endPrompt.onStatus(status, playbackRate);
+  }, [endPrompt.onStatus, playbackRate]);
 
   // Restore position after a language swap, and re-apply the chosen speed
   // since a remounted video resets to 1x.
@@ -448,6 +492,10 @@ export default function V5PlayerScreen() {
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (endPrompt.visible) {
+        endPrompt.decline();
+        return true;
+      }
       if (notesOpen) {
         closeNotes();
         return true;
@@ -459,7 +507,7 @@ export default function V5PlayerScreen() {
       return false;
     });
     return () => sub.remove();
-  }, [notesOpen, isFullscreen, closeNotes, leaveFullscreen]);
+  }, [endPrompt.visible, endPrompt.decline, notesOpen, isFullscreen, closeNotes, leaveFullscreen]);
 
   useEffect(() => {
     return navigation.addListener('beforeRemove', (event: any) => {
@@ -739,7 +787,7 @@ export default function V5PlayerScreen() {
           </>
         )}
 
-        {controlsVisible && !loading && !error && (
+        {controlsVisible && !endPrompt.visible && !loading && !error && (
           <View style={styles.controlsOverlay} pointerEvents="box-none">
             {isFullscreen && playerHeader(true)}
             <View style={styles.overlaySpacer} pointerEvents="none" />
@@ -802,9 +850,16 @@ export default function V5PlayerScreen() {
         }}
       />
 
+      <V5EndAskPrompt
+        visible={endPrompt.visible}
+        lectureTitle={title}
+        onYes={handleEndAskYes}
+        onDismiss={endPrompt.decline}
+      />
+
       {askAIOpen && !!teacherSubject && (
         <AskAIAssistant
-          trigger="mid"
+          trigger={askTrigger}
           onClose={handleCloseAskAI}
           subject={teacherSubject}
           topicTitle={title}
