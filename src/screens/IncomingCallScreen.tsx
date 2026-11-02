@@ -33,7 +33,7 @@ import {
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { getReminderLocal, markOutcome } from '../services/reminders';
 import { findLocalAudio } from '../services/reminders/audio';
-import { planOpenClass } from '../services/reminders/openClass';
+import { planOpenClass, openClassLabel, openClassLevel } from '../services/reminders/openClass';
 import type { Reminder } from '../types/reminder';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'IncomingCall'>;
@@ -41,12 +41,15 @@ type Props = NativeStackScreenProps<RootStackParamList, 'IncomingCall'>;
 const RING_TIMEOUT_MS = 30000;
 const GRADIENT: [string, string] = ['#111827', '#1F2937'];
 const GLOW_DURATION_MS = 1200;
+const REMOVED_NOTE = 'This session was removed from your timetable.';
 
 export default function IncomingCallScreen({ navigation, route }: Props) {
-  const { reminderId } = route.params;
+  const { reminderId, src, target: paramTarget } = route.params;
   const reduceMotion = useReduceMotion();
   const [ringing, setRinging] = useState(true);
   const [reminder, setReminder] = useState<Reminder | null>(null);
+  // Timetable call whose row is gone (session deleted): keep ringing, show a note, Answer still works.
+  const [reminderMissing, setReminderMissing] = useState(false);
   const handledRef = useRef(false);
   // Answer keeps the primed voice for ReminderCallScreen, so the unmount below must not release it.
   const answeredRef = useRef(false);
@@ -83,6 +86,11 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
       .then((r) => {
         if (!mountedRef.current) return;
         if (!r) {
+          if (src === 'tt') {
+            // Timetable call: the session was deleted. Keep ringing; the notification data still carries the target.
+            setReminderMissing(true);
+            return;
+          }
           if (handledRef.current) return;
           handledRef.current = true;
           setRinging(false);
@@ -92,7 +100,7 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
         setReminder(r);
       })
       .catch(() => {});
-  }, [reminderId, navigation]);
+  }, [reminderId, navigation, src]);
 
   useEffect(() => {
     checkStillExists();
@@ -105,6 +113,9 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
   );
 
   const text = reminder?.message_text?.trim() ?? '';
+  const target = reminder?.target ?? paramTarget ?? null;
+  const removed = src === 'tt' && (reminderMissing || reminder?.status === 'cancelled');
+  const openLabel = openClassLabel(openClassLevel(target));
 
   // Announce the incoming call once the reminder text is known (or not found).
   const announcedRef = useRef(false);
@@ -175,23 +186,23 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
     }
     const outcome = kind === 'answer' ? 'answered' : 'missed';
     markOutcome(reminderId, outcome).catch(() => {});
-    // The ReminderCall route type gains `mode` in WP8; cast until then.
-    const callParams = {
+    const callParams: RootStackParamList['ReminderCall'] = {
       reminderId,
       autoplay: kind === 'answer',
       mode: 'call',
-    } as RootStackParamList['ReminderCall'];
+      ...(src === 'tt' ? { src: 'tt' as const, target: target ?? null } : {}),
+    };
     navigation.replace('ReminderCall', callParams);
   };
 
-  // "Open class": stop ringing, record the call as answered, and go to the reminder's Classes tab.
+  // "Open topic": stop ringing, record the call as answered, and go to the topic's Classes tab.
   const openClass = () => {
     if (handledRef.current) return;
     handledRef.current = true;
     if (mountedRef.current) setRinging(false);
     releaseReminderVoice();
     markOutcome(reminderId, 'answered').catch(() => {});
-    const plan = planOpenClass(reminder?.target, reminderId);
+    const plan = planOpenClass(target, reminderId);
     if (plan.intent.name === 'StudyTimetable') {
       navigation.replace('StudyTimetable');
     } else {
@@ -228,8 +239,8 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
         <View style={styles.middle}>
           <RingingAvatar ringing={ringing} size={120} />
           <Text style={styles.name}>Simple Lecture Teacher</Text>
-          <Text style={styles.subtitle} numberOfLines={2}>
-            {text || 'Reminder'}
+          <Text style={[styles.subtitle, removed && styles.removedNote]} numberOfLines={2}>
+            {removed ? REMOVED_NOTE : text || 'Reminder'}
           </Text>
         </View>
 
@@ -271,15 +282,15 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
           <View style={styles.actionCol}>
             <TouchableOpacity
               onPress={openClass}
-              disabled={!reminder}
-              style={[styles.circle, styles.classCircle, !reminder && styles.disabled]}
+              disabled={!reminder && !target && src !== 'tt'}
+              style={[styles.circle, styles.classCircle, !reminder && !target && src !== 'tt' && styles.disabled]}
               accessibilityRole="button"
-              accessibilityLabel="Open class"
+              accessibilityLabel={openLabel}
               activeOpacity={0.8}
             >
               <Ionicons name="book-outline" size={30} color={colors.white} />
             </TouchableOpacity>
-            <Text style={styles.actionLabel}>Open class</Text>
+            <Text style={styles.actionLabel} numberOfLines={1}>{openLabel}</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -369,5 +380,10 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.regular,
     fontSize: fontSize.sm,
     color: colors.gray300,
+    maxWidth: 100,
+    textAlign: 'center',
+  },
+  removedNote: {
+    color: colors.warning,
   },
 });

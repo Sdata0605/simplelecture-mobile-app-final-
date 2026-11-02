@@ -136,6 +136,21 @@ export function normalizeRow(raw: Partial<Reminder> & { id: string }): Reminder 
   r.call_enabled = r.kind === 'call';
   if (!r.section) r.section = r.repeat_rule === 'daily' || r.repeat_rule === 'weekdays' || r.repeat_rule === 'weekly' ? 'daily' : 'calendar';
   if (!r.audio_status) r.audio_status = 'none';
+  // Timetable links: the server sends course_id / subject_id / chapter_id / topic_id; the app reads `target`.
+  const hasIds = !!(r.course_id || r.subject_id || r.chapter_id || r.topic_id);
+  if (hasIds) {
+    r.target = {
+      courseId: r.course_id ?? null,
+      subjectId: r.subject_id ?? null,
+      chapterId: r.chapter_id ?? null,
+      topicId: r.topic_id ?? null,
+      topicTitle: r.title?.trim() || null,
+    };
+  } else if (r.source !== 'timetable') {
+    r.target = null;
+  } else {
+    r.target = r.target ?? null;
+  }
   return r;
 }
 

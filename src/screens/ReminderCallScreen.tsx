@@ -35,7 +35,7 @@ import {
   type VoiceSource,
 } from '../services/reminders';
 import { spokenScript } from '../services/reminders/spokenScript';
-import { planOpenClass } from '../services/reminders/openClass';
+import { planOpenClass, openClassLabel, openClassLevel } from '../services/reminders/openClass';
 import type { Reminder } from '../types/reminder';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ReminderCall'>;
@@ -47,6 +47,9 @@ type VoicePath = 'file' | 'device' | 'text';
 // D-9: the edge-function fetch is bounded in time so the call never hangs on "Connecting".
 const VOICE_FETCH_TIMEOUT_MS = 6000;
 const GRADIENT: [string, string] = ['#111827', '#1F2937'];
+// Shown (and spoken with the phone voice) when a timetable call's session was deleted.
+const REMOVED_NOTE = 'This session was removed from your timetable.';
+const REMOVED_SCRIPT = 'This study session was removed from your timetable.';
 
 function formatTime(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -104,8 +107,7 @@ function SoundBars({ active }: { active: boolean }) {
 }
 
 export default function ReminderCallScreen({ navigation, route }: Props) {
-  // ReminderCall gains `mode` in WP8; cast until the param type is updated.
-  const params = route.params as RootStackParamList['ReminderCall'] & { mode?: CallMode };
+  const params = route.params;
   const { reminderId } = params;
   const autoplay = !!params.autoplay;
   const mode: CallMode = params.mode ?? 'call';
@@ -152,16 +154,18 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
   };
 
   // Re-checks the reminder on mount and on focus. If it was deleted, stop the audio and leave.
+  // Timetable calls stay on screen instead: they show the "removed" note and Answer keeps working.
+  const isTimetable = params.src === 'tt';
   const checkStillExists = useCallback(() => {
     getReminderLocal(reminderId)
       .then((r) => {
         if (!mountedRef.current) return;
-        if (r) return;
+        if (r || isTimetable) return;
         stopAudioRef.current();
         if (navigation.canGoBack()) navigation.goBack();
       })
       .catch(() => {});
-  }, [reminderId, navigation]);
+  }, [reminderId, navigation, isTimetable]);
 
   useEffect(() => {
     checkStillExists();
@@ -174,6 +178,11 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
   );
 
   const isMissed = mode === 'call' && reminder?.status === 'missed';
+  // Timetable call whose session was deleted (row gone), or cancelled. Shown with a note, not a silent exit.
+  const missingRow = isTimetable && !loadingReminder && !reminder;
+  const removedNote = isTimetable && (missingRow || reminder?.status === 'cancelled');
+  const target = reminder?.target ?? params.target ?? null;
+  const openLabel = openClassLabel(openClassLevel(target));
   const filePlaying = path === 'file' && fileState === 'playing';
   const deviceSpeaking = path === 'device' && spokenState === 'speaking';
   const playing = filePlaying || deviceSpeaking;
@@ -199,6 +208,7 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
     loadingReminder ||
     resolving ||
     (!!reminder && mode === 'call' && path === null) ||
+    (missingRow && autoplay && path === null) ||
     (path === 'file' && fileState === 'loading') ||
     (path === 'device' && spokenState === 'loading');
 
@@ -280,6 +290,17 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
     requestPlay();
   }, [autoplay, mode, reminder, path, requestPlay]);
 
+  // Timetable call with no row left: Answer speaks a short note with the phone voice (no file, no network).
+  useEffect(() => {
+    if (!missingRow || !autoplay || autoplayedRef.current) return;
+    autoplayedRef.current = true;
+    setPath('device');
+    void speakSpoken(REMOVED_SCRIPT, 'en-IN').then((outcome) => {
+      if (!mountedRef.current) return;
+      if (outcome === 'unavailable' || outcome === 'locked') setPath('text');
+    });
+  }, [missingRow, autoplay, speakSpoken]);
+
   // Fallback 1: the voice file failed to play, so use the phone's voice.
   useEffect(() => {
     if (path !== 'file' || fileState !== 'error' || !reminder) return;
@@ -336,7 +357,7 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
     }
   };
 
-  // "Open class": stop playback, record the outcome as Done does, and go to the reminder's Classes tab.
+  // "Open topic": stop playback, record the outcome as Done does, and go to the topic's Classes tab.
   const onOpenClass = () => {
     stopFile();
     stopSpoken();
@@ -347,7 +368,7 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
         markOutcome(reminderId, 'answered').catch(() => {});
       }
     }
-    const plan = planOpenClass(reminder?.target, reminderId);
+    const plan = planOpenClass(target, reminderId);
     if (plan.intent.name === 'StudyTimetable') {
       navigation.replace('StudyTimetable');
     } else {
@@ -359,13 +380,13 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
     <TouchableOpacity
       style={styles.openClassBtn}
       onPress={onOpenClass}
-      disabled={!reminder}
+      disabled={!reminder && !target && !isTimetable}
       accessibilityRole="button"
-      accessibilityLabel="Open class"
+      accessibilityLabel={openLabel}
       activeOpacity={0.85}
     >
       <Ionicons name="book-outline" size={20} color={colors.white} />
-      <Text style={styles.outlineBtnText}>Open class</Text>
+      <Text style={styles.outlineBtnText}>{openLabel}</Text>
     </TouchableOpacity>
   );
 
@@ -382,7 +403,7 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
               ? 'Connecting…'
               : 'Reminder call';
 
-  const transcript = reminder ? scriptFor(reminder) : '';
+  const transcript = reminder ? scriptFor(reminder) : missingRow ? REMOVED_SCRIPT : '';
   const title = reminder?.title?.trim() || 'Reminder';
 
   let bottom: ReactNode = null;
@@ -440,16 +461,19 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
     // Message opened from a notification: voice is loaded on demand.
     bottom = (
       <View style={styles.endRow}>
-        <TouchableOpacity
-          style={styles.primaryBtn}
-          onPress={onListen}
-          disabled={!reminder}
-          accessibilityRole="button"
-          accessibilityLabel="Listen"
-          activeOpacity={0.85}
-        >
-          <Text style={styles.primaryBtnText}>Listen</Text>
-        </TouchableOpacity>
+        {reminder ? (
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={onListen}
+            accessibilityRole="button"
+            accessibilityLabel="Listen"
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryBtnText}>Listen</Text>
+          </TouchableOpacity>
+        ) : (
+          openClassButton
+        )}
         <TouchableOpacity
           style={styles.outlineBtn}
           onPress={onDone}
@@ -512,12 +536,18 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
           </Text>
         </View>
 
-        {!loadingReminder && !reminder ? (
+        {!loadingReminder && !reminder && !isTimetable ? (
           <View style={styles.center}>
             <Text style={styles.subtitle}>This reminder could not be found.</Text>
           </View>
         ) : (
           <ScrollView style={styles.transcriptWrap} contentContainerStyle={styles.transcriptContent}>
+            {removedNote && (
+              <View style={styles.fallbackRow}>
+                <Ionicons name="information-circle-outline" size={18} color={colors.warning} />
+                <Text style={styles.fallbackText}>{REMOVED_NOTE}</Text>
+              </View>
+            )}
             {path === 'device' && (
               <View style={styles.fallbackRow}>
                 <Ionicons name="volume-medium-outline" size={18} color={colors.warning} />

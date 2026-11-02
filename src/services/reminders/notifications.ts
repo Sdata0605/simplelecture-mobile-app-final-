@@ -309,13 +309,13 @@ export function planResponse(data: ReminderNotificationData, actionIdentifier: s
   const { reminderId, kind } = data;
   const isDefaultTap = actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER;
 
-  // Timetable reminder, body tap (any kind): go straight to the topic's Classes tab.
-  // Call Answer and message Done keep their existing behaviour below.
-  if (data.src === 'tt' && isDefaultTap) {
+  // Timetable reminder, body tap on a notification (not a call): go straight to the topic's Classes tab.
+  // Timetable calls take the Answer path below, so the voice plays first.
+  if (data.src === 'tt' && isDefaultTap && kind !== 'call') {
     return {
       type: 'classes',
       reminderId,
-      outcome: kind === 'call' ? 'answered' : 'delivered',
+      outcome: 'delivered',
       nav: planOpenClass(data.t, reminderId).intent,
     };
   }
@@ -329,7 +329,15 @@ export function planResponse(data: ReminderNotificationData, actionIdentifier: s
         type: 'answer',
         reminderId,
         outcome: 'answered',
-        nav: { name: 'ReminderCall', params: { reminderId, autoplay: true, mode: 'call' } },
+        nav: {
+          name: 'ReminderCall',
+          params: {
+            reminderId,
+            autoplay: true,
+            mode: 'call',
+            ...(data.src === 'tt' ? { src: 'tt', target: data.t ?? null } : {}),
+          },
+        },
       };
     }
     return { type: 'ignore' };
@@ -375,5 +383,11 @@ export function planForeground(
     (currentRoute?.name === 'IncomingCall' || currentRoute?.name === 'ReminderCall') &&
     params?.reminderId === data.reminderId;
   if (alreadyShowing) return null;
-  return { name: 'IncomingCall', params: { reminderId: data.reminderId } };
+  return {
+    name: 'IncomingCall',
+    params: {
+      reminderId: data.reminderId,
+      ...(data.src === 'tt' ? { src: 'tt', target: data.t ?? null } : {}),
+    },
+  };
 }

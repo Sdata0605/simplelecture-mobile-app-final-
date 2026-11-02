@@ -81,8 +81,9 @@ function localDateKey(d: Date): string {
 }
 
 /** Database body for an upsert: every column the client writes, without server timestamps. */
-function wireBody(row: Reminder): Record<string, unknown> {
-  const { created_at: _createdAt, ...rest } = row;
+export function wireBody(row: Reminder): Record<string, unknown> {
+  // `target` is client-only (built from the course/subject/chapter/topic ids); the database has no such column.
+  const { created_at: _createdAt, target: _target, ...rest } = row;
   return { ...rest };
 }
 

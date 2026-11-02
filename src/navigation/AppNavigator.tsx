@@ -59,6 +59,7 @@ import TimetableReminderSettingsScreen from '../screens/TimetableReminderSetting
 import MyTestsScreen from '../screens/MyTestsScreen';
 import MyTestTakeScreen from '../screens/MyTestTakeScreen';
 import MyTestResultScreen from '../screens/MyTestResultScreen';
+import type { ReminderTarget } from '../types/reminder';
 import MyNotesCoursesScreen from '../screens/MyNotesCoursesScreen';
 import MyNotesSubjectsScreen from '../screens/MyNotesSubjectsScreen';
 import MyNotesChapterScreen from '../screens/MyNotesChapterScreen';
@@ -198,8 +199,9 @@ export type RootStackParamList = {
   AITeacher: { initialSubject?: string } | undefined;
   AITeacherSettings: undefined;
   Reminders: RemindersRouteParams | undefined;
-  IncomingCall: { reminderId: string };
-  ReminderCall: { reminderId: string; autoplay?: boolean; mode?: 'call' | 'message' };
+  // src 'tt' and target come from a study-timetable call (target = where "Open topic" goes).
+  IncomingCall: { reminderId: string; src?: 'tt'; target?: ReminderTarget | null };
+  ReminderCall: { reminderId: string; autoplay?: boolean; mode?: 'call' | 'message'; src?: 'tt'; target?: ReminderTarget | null };
 };
 
 export const navigationRef = createRef<NavigationContainerRef<RootStackParamList>>();

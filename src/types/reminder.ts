@@ -25,7 +25,12 @@ export interface Reminder {
   // Timetable fields (additive and optional: absent on user rows and older servers).
   source?: 'user' | 'timetable';
   session_id?: string | null;
-  target?: ReminderTarget | null;   // where "Open class" goes
+  // Server ids of the session (timetable rows). store.normalizeRow maps them into `target`.
+  course_id?: string | null;
+  subject_id?: string | null;
+  chapter_id?: string | null;
+  topic_id?: string | null;
+  target?: ReminderTarget | null;   // where "Open topic" goes (client-only, never sent to the server)
   device_ready_at?: string | null;
   device_audio_hash?: string | null;
 }
