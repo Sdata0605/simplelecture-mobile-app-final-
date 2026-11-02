@@ -7,6 +7,7 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -28,6 +29,7 @@ export default function ProfileScreen() {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [fullName, setFullName] = useState('');
@@ -94,6 +96,32 @@ export default function ProfileScreen() {
       index: 0,
       routes: [{ name: 'Onboarding' }],
     });
+  };
+
+  const performDeleteAccount = async () => {
+    setIsDeleting(true);
+    const result = await supabase.deleteAccount();
+    if (!result.success) {
+      setIsDeleting(false);
+      Alert.alert('Could not delete account', result.error || 'Please try again.');
+      return;
+    }
+    await logout();
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Onboarding' }],
+    });
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete account?',
+      'This permanently deletes your account and your learning data. You cannot undo this.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: performDeleteAccount },
+      ],
+    );
   };
 
   const getInitial = () => {
@@ -299,6 +327,26 @@ export default function ProfileScreen() {
               <Text style={styles.settingsText}>Help & Support</Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.settingsItem}
+            onPress={handleDeleteAccount}
+            disabled={isDeleting}
+          >
+            <View style={styles.settingsLeft}>
+              <View style={[styles.settingsIconContainer, { backgroundColor: '#FEE2E2' }]}>
+                <Ionicons name="trash-outline" size={20} color="#EF4444" />
+              </View>
+              <Text style={[styles.settingsText, { color: '#EF4444' }]}>
+                {isDeleting ? 'Deleting account...' : 'Delete Account'}
+              </Text>
+            </View>
+            {isDeleting ? (
+              <ActivityIndicator size="small" color="#EF4444" />
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color="#EF4444" />
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity style={[styles.settingsItem, styles.logoutItem]} onPress={handleLogout}>

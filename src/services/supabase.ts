@@ -1146,6 +1146,40 @@ class SupabaseService {
     await AsyncStorage.multiRemove([AUTH_TOKEN_KEY, REFRESH_TOKEN_KEY, USER_KEY]);
   }
 
+  /**
+   * Permanently deletes the signed-in user's account and personal data. The edge function identifies the user from
+   * the session token, so this only ever removes the caller's own account. Required by App Store guideline 5.1.1(v).
+   */
+  async deleteAccount(): Promise<{ success: boolean; error?: string }> {
+    const token = await this.getAccessToken();
+    if (!token) {
+      return { success: false, error: 'You are not signed in.' };
+    }
+    try {
+      const response = await fetchWithTimeout(
+        `${SUPABASE_URL}/functions/v1/delete-my-account`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: '{}',
+        },
+        30000,
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        return { success: false, error: data.error || 'Could not delete your account. Please try again.' };
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('[deleteAccount] Error:', error);
+      return { success: false, error: 'Network error. Check your connection and try again.' };
+    }
+  }
+
   async sendPhoneOtp(phone: string, purpose: 'login' | 'signup'): Promise<{ success: boolean; error?: string }> {
     try {
       const response = await fetch(`${SUPABASE_URL}/functions/v1/send-phone-otp`, {
