@@ -3,15 +3,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { SUPABASE_URL as SB_PROXY_URL, SUPABASE_ANON_KEY as SB_ANON_KEY, AUTH_TOKEN_KEY, getValidAccessToken } from './supabase';
-import { isCallRemindersEnabled } from '../constants/featureFlags';
-import { rescheduleAllCallReminders, clearLocalCallAudio } from './callReminders';
+import { FEATURES } from '../constants/featureFlags';
+import { syncReminders, clearRemindersOnLogout } from './reminders';
 
 const WELCOME_SHOWN_KEY = 'welcome_notification_shown';
 const LOGIN_WELCOME_LAST_KEY = 'login_welcome_last_sent';
 const MOTIVATIONAL_NOTIF_ID = 'motivational_recurring';
 const STUDY_REMINDER_PREFIX = 'study-reminder-';
 const STUDY_REMINDER_WINDOW_DAYS = 7;
-const STUDY_REMINDER_MAX = 60;
+// Study reminders share the iOS 64-request budget with Reminders v2 (D-4).
+const STUDY_REMINDER_MAX_DEFAULT = 60;
+const STUDY_REMINDER_MAX_WITH_REMINDERS = 20;
 const LOGIN_WELCOME_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 const SUPABASE_URL = 'https://oxwhqvsoelqqsblmqkxx.supabase.co';
@@ -63,6 +65,28 @@ function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+/** Reminders v2 flag, with the same web guard as isCallRemindersEnabled. */
+function isRemindersOn(): boolean {
+  return FEATURES.reminders && Platform.OS !== 'web';
+}
+
+function studyReminderMax(): number {
+  return isRemindersOn() ? STUDY_REMINDER_MAX_WITH_REMINDERS : STUDY_REMINDER_MAX_DEFAULT;
+}
+
+/**
+ * Removes only the requests this module owns (motivational and study reminders) before they
+ * are rescheduled. Reminder v2 and other prefixes are left alone.
+ */
+async function cancelOwnScheduledNotifications(): Promise<void> {
+  const pending = await Notifications.getAllScheduledNotificationsAsync();
+  for (const n of pending) {
+    if (n.identifier === MOTIVATIONAL_NOTIF_ID || n.identifier.startsWith(STUDY_REMINDER_PREFIX)) {
+      await Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => undefined);
+    }
+  }
+}
+
 async function ensureNotificationChannel(): Promise<void> {
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('default', {
@@ -98,6 +122,8 @@ export async function setupAndScheduleNotifications(): Promise<void> {
     console.log('[Notifications] Permission granted:', granted);
     if (!granted) {
       console.log('[Notifications] ABORTED: Permission not granted');
+      // Saving still works without permission, so flush the reminder outbox anyway.
+      if (isRemindersOn()) await syncReminders('app-start');
       console.log('[Notifications] ========== FULL NOTIFICATION SETUP END ==========');
       return;
     }
@@ -109,8 +135,10 @@ export async function setupAndScheduleNotifications(): Promise<void> {
     console.log('[Notifications] Notifications before cancel:', beforeCancel.length);
     beforeCancel.forEach(n => console.log(`[Notifications]   Before: id=${n.identifier}, title="${n.content.title}"`));
 
-    await Notifications.cancelAllScheduledNotificationsAsync();
-    console.log('[Notifications] Cleared all previously scheduled notifications');
+    // Only our own ids are cleared. A global cancel would also wipe Reminders v2 alarms,
+    // and an offline launch would lose them all.
+    await cancelOwnScheduledNotifications();
+    console.log('[Notifications] Cleared motivational and study-reminder notifications');
 
     if (isExpoGo()) {
       console.log('[Notifications] Running in Expo Go — skipping repeating notifications');
@@ -127,11 +155,11 @@ export async function setupAndScheduleNotifications(): Promise<void> {
     // so there is no local blog scheduling here anymore.
     console.log('[Notifications] Step 3/3: Scheduling study reminders...');
     await scheduleStudyReminders();
-    // cancelAllScheduledNotificationsAsync above also removed the call reminders,
-    // so rebuild them from the database (no-op when the flag is off).
-    if (isCallRemindersEnabled()) {
-      console.log('[Notifications] Step 4/4: Rescheduling call reminders...');
-      await rescheduleAllCallReminders();
+    // Reminders v2 keeps its own alarms on the device. Sync them from the local cache and the
+    // server (no-op when the flag is off).
+    if (isRemindersOn()) {
+      console.log('[Notifications] Step 4/4: Syncing reminders...');
+      await syncReminders('app-start');
     }
     console.log('[Notifications] All notifications scheduled successfully');
 
@@ -348,7 +376,7 @@ export async function scheduleStudyReminders(): Promise<void> {
       .map(s => ({ session: s, fire: new Date(s.scheduled_at) }))
       .filter(s => !isNaN(s.fire.getTime()) && s.fire.getTime() > nowMs)
       .sort((a, b) => a.fire.getTime() - b.fire.getTime())
-      .slice(0, STUDY_REMINDER_MAX);
+      .slice(0, studyReminderMax());
 
     const validIds = new Set(valid.map(s => `${STUDY_REMINDER_PREFIX}${s.session.id}`));
 
@@ -393,9 +421,10 @@ export async function scheduleStudyReminders(): Promise<void> {
 }
 
 export async function cancelDailyNotifications(): Promise<void> {
+  // Logout path: clears everything, including reminders, for the next user of this phone.
   await Notifications.cancelAllScheduledNotificationsAsync();
-  if (isCallRemindersEnabled()) {
-    await clearLocalCallAudio();
+  if (isRemindersOn()) {
+    await clearRemindersOnLogout();
   }
   console.log('[Notifications] All notifications cancelled');
 }

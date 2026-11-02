@@ -13,14 +13,23 @@ import Animated, {
 } from 'react-native-reanimated';
 import { colors } from '../../constants/theme';
 import { useReduceMotion } from '../../hooks/useReduceMotion';
+import type { ReminderKind } from '../../types/reminder';
 
 const PULSE_DURATION_MS = 1800;
 const PULSE_STAGGER_MS = 600;
 const PULSE_COUNT = 3;
 
+// Core icon per reminder kind. Without a kind the teacher icon is shown.
+export const KIND_AVATAR_ICON: Record<ReminderKind, keyof typeof Ionicons.glyphMap> = {
+  call: 'call',
+  message: 'chatbubble-ellipses',
+  notification: 'notifications',
+};
+
 interface RingingAvatarProps {
   ringing: boolean;
   size?: number;
+  kind?: ReminderKind;
 }
 
 function PulseRing({
@@ -53,7 +62,7 @@ function PulseRing({
  * Call avatar with pulse rings. Pulses while `ringing`; static when the user
  * has reduce-motion turned on.
  */
-export default function RingingAvatar({ ringing, size = 120 }: RingingAvatarProps) {
+export default function RingingAvatar({ ringing, size = 120, kind }: RingingAvatarProps) {
   const reduceMotion = useReduceMotion();
   const animate = ringing && !reduceMotion;
 
@@ -98,7 +107,11 @@ export default function RingingAvatar({ ringing, size = 120 }: RingingAvatarProp
           { width: coreSize, height: coreSize, borderRadius: coreSize / 2 },
         ]}
       >
-        <Ionicons name="school" size={Math.round(coreSize * 0.47)} color={colors.white} />
+        <Ionicons
+          name={kind ? KIND_AVATAR_ICON[kind] : 'school'}
+          size={Math.round(coreSize * 0.47)}
+          color={colors.white}
+        />
       </View>
     </View>
   );

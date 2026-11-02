@@ -4,7 +4,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, User } from '../services/supabase';
 import { sendWelcomeLoginNotification } from '../services/scheduledNotifications';
 import { registerFcmToken, removeFcmToken } from '../services/fcmService';
+import { initReminders, clearRemindersOnLogout } from '../services/reminders';
+import { FEATURES } from '../constants/featureFlags';
 import { maybeRequestReview } from '../utils/inAppReview';
+
+/** Drops reminder alarms, cache and outbox for this phone. Never throws: logout must finish. */
+async function clearRemindersForLogout(): Promise<void> {
+  if (!FEATURES.reminders) return;
+  await clearRemindersOnLogout().catch(e => console.warn('[Reminders] logout cleanup failed', e));
+}
 
 const SESSION_COUNT_KEY = '@session_count';
 const REVIEW_SESSION_THRESHOLD = 3;
@@ -56,12 +64,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // When the refresh token is definitively invalid/revoked (e.g. password
     // changed, logged out elsewhere), force a clean re-login.
     supabase.setSessionInvalidHandler(() => {
+      void clearRemindersForLogout();
       supabase.logout();
       setUser(null);
       setHasEnrolledCourses(null);
     });
     return () => supabase.setSessionInvalidHandler(null);
   }, []);
+
+  // Every login path (password, OTP, Google, signup, session restore) sets the user. Load the
+  // reminder cache for that user and sync it (initReminders ends with syncReminders('app-start')).
+  useEffect(() => {
+    if (!FEATURES.reminders || !user) return;
+    initReminders(user.id).catch(e => console.warn('[Reminders] init after login failed', e));
+  }, [user?.id]);
 
   useEffect(() => {
     checkAuth();
@@ -219,6 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user) {
       await removeFcmToken(user.id);
     }
+    await clearRemindersForLogout();
     await supabase.logout();
     setUser(null);
     setHasEnrolledCourses(null);

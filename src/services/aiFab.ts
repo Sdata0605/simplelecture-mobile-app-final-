@@ -28,6 +28,8 @@ export const AI_FAB_HIDDEN_ROUTES: ReadonlySet<string> = new Set([
   'GroupChat',
   'ForumPost',
   'Support',
+  'IncomingCall',
+  'ReminderCall',
 ]);
 
 export interface FabVisibility {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   View,
   Text,
@@ -22,16 +22,29 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors, spacing, fontSize, fontFamily, borderRadius } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import RingingAvatar from '../components/callReminder/RingingAvatar';
-import { useReminderCallAudio } from '../hooks/useReminderCallAudio';
+import { useReminderCallAudio, useSpokenFallback } from '../hooks/useReminderCallAudio';
 import { useReduceMotion } from '../hooks/useReduceMotion';
-import { getReminder, ensureLocalAudio } from '../services/callReminders';
-import type { CallReminder } from '../types/callReminder';
+import {
+  getReminderLocal,
+  markOutcome,
+  resolveVoiceSource,
+  type VoiceSource,
+} from '../services/reminders';
+import { spokenScript } from '../services/reminders/spokenScript';
+import type { Reminder } from '../types/reminder';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ReminderCall'>;
 
+type CallMode = 'call' | 'message';
+// Which voice path is active. 'file' = pre-generated mp3, 'device' = phone voice, 'text' = text only.
+type VoicePath = 'file' | 'device' | 'text';
+
+// D-9: the edge-function fetch is bounded in time so the call never hangs on "Connecting".
+const VOICE_FETCH_TIMEOUT_MS = 6000;
 const GRADIENT: [string, string] = ['#111827', '#1F2937'];
 
 function formatTime(ms: number): string {
@@ -39,6 +52,11 @@ function formatTime(ms: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+// The spoken script is also the transcript shown on screen (E.9).
+function scriptFor(r: Reminder): string {
+  return spokenScript(r.message_text, r.language) || r.message_text.trim();
 }
 
 function SoundBar({ progress, active }: { progress: SharedValue<number>; active: boolean }) {
@@ -85,21 +103,89 @@ function SoundBars({ active }: { active: boolean }) {
 }
 
 export default function ReminderCallScreen({ navigation, route }: Props) {
-  const { reminderId, autoplay } = route.params;
-  const [reminder, setReminder] = useState<CallReminder | null>(null);
+  // ReminderCall gains `mode` in WP8; cast until the param type is updated.
+  const params = route.params as RootStackParamList['ReminderCall'] & { mode?: CallMode };
+  const { reminderId } = params;
+  const autoplay = !!params.autoplay;
+  const mode: CallMode = params.mode ?? 'call';
+
+  const [reminder, setReminder] = useState<Reminder | null>(null);
   const [loadingReminder, setLoadingReminder] = useState(true);
-  // undefined = not resolved yet, null = no local audio (text fallback)
-  const [localUri, setLocalUri] = useState<string | null | undefined>(undefined);
+  // null = voice source not resolved yet.
+  const [path, setPath] = useState<VoicePath | null>(null);
+  const [fileUri, setFileUri] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [playTick, setPlayTick] = useState(0);
+
+  const sourcePromiseRef = useRef<Promise<VoiceSource> | null>(null);
   const autoplayedRef = useRef(false);
+  const pendingPlayRef = useRef(false);
+  const mountedRef = useRef(true);
 
-  const audio = useReminderCallAudio(localUri ?? null);
-  const { state, play, stop, positionMs } = audio;
+  const audio = useReminderCallAudio(fileUri);
+  const { play: playFile, stop: stopFile, positionMs, state: fileState } = audio;
+  const {
+    speak: speakSpoken,
+    stop: stopSpoken,
+    state: spokenState,
+  } = useSpokenFallback();
 
-  // Load the reminder row.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Latest stop function, so the focus check below does not re-run on every render.
+  const stopAudioRef = useRef<() => void>(() => {});
+  stopAudioRef.current = () => {
+    stopFile();
+    stopSpoken();
+  };
+
+  // Re-checks the reminder on mount and on focus. If it was deleted, stop the audio and leave.
+  const checkStillExists = useCallback(() => {
+    getReminderLocal(reminderId)
+      .then((r) => {
+        if (!mountedRef.current) return;
+        if (r) return;
+        stopAudioRef.current();
+        if (navigation.canGoBack()) navigation.goBack();
+      })
+      .catch(() => {});
+  }, [reminderId, navigation]);
+
+  useEffect(() => {
+    checkStillExists();
+  }, [checkStillExists]);
+
+  useFocusEffect(
+    useCallback(() => {
+      checkStillExists();
+    }, [checkStillExists])
+  );
+
+  const isMissed = mode === 'call' && reminder?.status === 'missed';
+  const filePlaying = path === 'file' && fileState === 'playing';
+  const deviceSpeaking = path === 'device' && spokenState === 'speaking';
+  const playing = filePlaying || deviceSpeaking;
+  const finished =
+    path === 'text' ||
+    (path === 'file' && fileState === 'ended') ||
+    (path === 'device' && spokenState === 'ended');
+  const connecting =
+    loadingReminder ||
+    resolving ||
+    (!!reminder && mode === 'call' && path === null) ||
+    (path === 'file' && fileState === 'loading') ||
+    (path === 'device' && spokenState === 'loading');
+
+  // Load the reminder row. Cache first, network within 5 s (facade).
   useEffect(() => {
     let active = true;
     setLoadingReminder(true);
-    getReminder(reminderId)
+    getReminderLocal(reminderId)
       .then((r) => {
         if (active) setReminder(r);
       })
@@ -114,77 +200,235 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
     };
   }, [reminderId]);
 
-  // Resolve the local mp3 (downloads if missing). Null means text-only.
+  // Resolves the voice source once: local file, then network (bounded), then device voice, then text.
+  const ensureSource = useCallback((r: Reminder): Promise<VoiceSource> => {
+    const existing = sourcePromiseRef.current;
+    if (existing) return existing;
+    const created = resolveVoiceSource(r, {
+      timeoutMs: VOICE_FETCH_TIMEOUT_MS,
+    }).catch((): VoiceSource => ({ type: 'text', script: scriptFor(r) }));
+    sourcePromiseRef.current = created;
+    return created;
+  }, []);
+
+  const applySource = (s: VoiceSource) => {
+    setFileUri(s.type === 'file' ? s.uri : null);
+    setPath(s.type);
+  };
+
+  // Calls resolve the voice up front; messages resolve lazily on "Listen".
   useEffect(() => {
-    if (!reminder) return;
+    if (!reminder || mode !== 'call') return;
     let active = true;
-    ensureLocalAudio(reminder)
-      .then((uri) => {
-        if (active) setLocalUri(uri ?? null);
-      })
-      .catch(() => {
-        if (active) setLocalUri(null);
-      });
+    ensureSource(reminder).then((s) => {
+      if (active) applySource(s);
+    });
     return () => {
       active = false;
     };
-  }, [reminder]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reminder, mode, ensureSource]);
 
-  // Autoplay once, when the audio has been resolved and the call was answered.
+  // Playback request. Set via a ref and a tick so the play runs after the
+  // voice path has been applied to the hooks (they read the URI on render).
+  const requestPlay = useCallback(() => {
+    pendingPlayRef.current = true;
+    setPlayTick((t) => t + 1);
+  }, []);
+
   useEffect(() => {
-    if (autoplayedRef.current) return;
-    if (!autoplay || localUri === undefined || !reminder) return;
+    if (!pendingPlayRef.current || path === null || !reminder) return;
+    pendingPlayRef.current = false;
+    if (path === 'file') {
+      playFile();
+      return;
+    }
+    if (path === 'device') {
+      void speakSpoken(scriptFor(reminder), reminder.language).then((outcome) => {
+        if (!mountedRef.current) return;
+        if (outcome === 'unavailable' || outcome === 'locked') setPath('text');
+      });
+    }
+  }, [path, playTick, reminder, playFile, speakSpoken]);
+
+  // Answered call: play once when the voice path is known.
+  useEffect(() => {
+    if (autoplayedRef.current || !autoplay || mode !== 'call' || !reminder || path === null) return;
     if (reminder.status === 'missed') return;
     autoplayedRef.current = true;
-    play();
-  }, [autoplay, localUri, reminder, play]);
+    requestPlay();
+  }, [autoplay, mode, reminder, path, requestPlay]);
 
-  const isMissed = reminder?.status === 'missed' && state === 'idle';
-  const showConnecting =
-    loadingReminder || localUri === undefined || state === 'loading' || (state === 'idle' && !!autoplay && !isMissed);
-  const showPlaying = state === 'playing';
-  const showEnded = state === 'ended';
-  const showError = state === 'error';
-  const showReady = state === 'idle' && !autoplay && !isMissed && !!reminder;
+  // Fallback 1: the mp3 failed to play, so use the phone's voice.
+  useEffect(() => {
+    if (path !== 'file' || fileState !== 'error' || !reminder) return;
+    let active = true;
+    speakSpoken(scriptFor(reminder), reminder.language).then((outcome) => {
+      if (active) setPath(outcome === 'started' ? 'device' : 'text');
+    });
+    return () => {
+      active = false;
+    };
+  }, [path, fileState, reminder, speakSpoken]);
 
-  const title = reminder?.title?.trim() || 'Study call';
-  const message = reminder?.message_text ?? '';
+  // Fallback 2: the phone's voice failed, so show the text only.
+  useEffect(() => {
+    if (path === 'device' && spokenState === 'error') setPath('text');
+  }, [path, spokenState]);
 
-  const headerLabel = isMissed
-    ? 'Missed study call'
-    : showPlaying
-      ? 'On call'
-      : showEnded
-        ? 'Call ended'
-        : showError
-          ? 'Call ended'
-          : showConnecting
-            ? 'Connecting…'
-            : 'Study call';
+  const onListen = () => {
+    if (!reminder) return;
+    if (path !== null) {
+      requestPlay();
+      return;
+    }
+    setResolving(true);
+    ensureSource(reminder).then((s) => {
+      if (!mountedRef.current) return;
+      setResolving(false);
+      applySource(s);
+      requestPlay();
+    });
+  };
 
-  const endButtons = (
-    <View style={styles.endRow}>
-      <TouchableOpacity
-        style={styles.primaryBtn}
-        onPress={() => navigation.navigate('StudyTimetable')}
-        accessibilityRole="button"
-        accessibilityLabel="Start studying"
-        activeOpacity={0.85}
-      >
-        <Text style={styles.primaryBtnText}>Start studying</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={styles.outlineBtn}
-        onPress={play}
-        disabled={!reminder}
-        accessibilityRole="button"
-        accessibilityLabel="Play again"
-        activeOpacity={0.85}
-      >
-        <Text style={styles.outlineBtnText}>Play again</Text>
-      </TouchableOpacity>
-    </View>
-  );
+  const onPlayAgain = () => {
+    requestPlay();
+  };
+
+  const onStop = () => {
+    stopFile();
+    stopSpoken();
+  };
+
+  const onDone = () => {
+    stopFile();
+    stopSpoken();
+    if (reminder) {
+      if (mode === 'message') {
+        markOutcome(reminderId, 'delivered').catch(() => {});
+      } else if (reminder.status !== 'missed') {
+        markOutcome(reminderId, 'answered').catch(() => {});
+      }
+    }
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    }
+  };
+
+  const headerLabel =
+    mode === 'message'
+      ? 'Reminder'
+      : isMissed && !playing && !finished
+        ? 'Missed call'
+        : playing
+          ? 'On call'
+          : finished
+            ? 'Call ended'
+            : connecting
+              ? 'Connecting…'
+              : 'Reminder call';
+
+  const transcript = reminder ? scriptFor(reminder) : '';
+  const title = reminder?.title?.trim() || 'Reminder';
+
+  let bottom: ReactNode = null;
+  if (playing) {
+    bottom = (
+      <View style={styles.stopCol}>
+        <TouchableOpacity
+          onPress={onStop}
+          style={[styles.circle, { backgroundColor: colors.error }]}
+          accessibilityRole="button"
+          accessibilityLabel="Stop call"
+          activeOpacity={0.85}
+        >
+          <Ionicons name="stop" size={30} color={colors.white} />
+        </TouchableOpacity>
+        <Text style={styles.actionLabel}>Stop</Text>
+      </View>
+    );
+  } else if (connecting) {
+    bottom = (
+      <View style={styles.center}>
+        <ActivityIndicator color={colors.primaryLight} />
+      </View>
+    );
+  } else if (finished) {
+    bottom = (
+      <View style={styles.endRow}>
+        <TouchableOpacity
+          style={styles.primaryBtn}
+          onPress={onDone}
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+          activeOpacity={0.85}
+        >
+          <Text style={styles.primaryBtnText}>Done</Text>
+        </TouchableOpacity>
+        {path !== 'text' && (
+          <TouchableOpacity
+            style={styles.outlineBtn}
+            onPress={onPlayAgain}
+            accessibilityRole="button"
+            accessibilityLabel="Play again"
+            activeOpacity={0.85}
+          >
+            <Text style={styles.outlineBtnText}>Play again</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  } else if (path === null) {
+    // Message opened from a notification: voice is loaded on demand.
+    bottom = (
+      <View style={styles.endRow}>
+        <TouchableOpacity
+          style={styles.primaryBtn}
+          onPress={onListen}
+          disabled={!reminder}
+          accessibilityRole="button"
+          accessibilityLabel="Listen"
+          activeOpacity={0.85}
+        >
+          <Text style={styles.primaryBtnText}>Listen</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.outlineBtn}
+          onPress={onDone}
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+          activeOpacity={0.85}
+        >
+          <Text style={styles.outlineBtnText}>Done</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  } else {
+    // Idle with a known voice: a missed call, or a message not yet played.
+    bottom = (
+      <View style={styles.endRow}>
+        <TouchableOpacity
+          style={styles.primaryBtn}
+          onPress={onPlayAgain}
+          disabled={!reminder}
+          accessibilityRole="button"
+          accessibilityLabel="Play message"
+          activeOpacity={0.85}
+        >
+          <Text style={styles.primaryBtnText}>Play message</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.outlineBtn}
+          onPress={onDone}
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+          activeOpacity={0.85}
+        >
+          <Text style={styles.outlineBtnText}>Done</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <LinearGradient colors={GRADIENT} style={styles.root}>
@@ -192,14 +436,18 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <Text style={styles.headerLabel}>{headerLabel}</Text>
-          {(showPlaying || showEnded) && (
+          {(filePlaying || (path === 'file' && fileState === 'ended')) && (
             <Text style={styles.timer}>{formatTime(positionMs)}</Text>
           )}
         </View>
 
         <View style={styles.avatarBlock}>
-          <RingingAvatar ringing={false} size={48} />
-          <SoundBars active={showPlaying} />
+          <RingingAvatar
+            ringing={false}
+            size={48}
+            kind={mode === 'message' ? reminder?.kind : undefined}
+          />
+          <SoundBars active={playing} />
           <Text style={styles.name}>Simple Lecture Teacher</Text>
           <Text style={styles.subtitle} numberOfLines={1}>
             {title}
@@ -212,76 +460,29 @@ export default function ReminderCallScreen({ navigation, route }: Props) {
           </View>
         ) : (
           <ScrollView style={styles.transcriptWrap} contentContainerStyle={styles.transcriptContent}>
-            {showError && (
+            {path === 'device' && (
+              <View style={styles.fallbackRow}>
+                <Ionicons name="volume-medium-outline" size={18} color={colors.warning} />
+                <Text style={styles.fallbackText}>Using your phone's voice</Text>
+              </View>
+            )}
+            {path === 'text' && (
               <View style={styles.fallbackRow}>
                 <Ionicons name="warning-outline" size={18} color={colors.warning} />
                 <Text style={styles.fallbackText}>
-                  Couldn't load voice — here's your message
+                  Couldn't play the voice. Here's your reminder.
                 </Text>
               </View>
             )}
-            {!!message && (
+            {!!transcript && (
               <View style={styles.transcriptCard}>
-                <Text style={styles.transcriptText}>{message}</Text>
+                <Text style={styles.transcriptText}>{transcript}</Text>
               </View>
             )}
           </ScrollView>
         )}
 
-        <View style={styles.bottom}>
-          {showConnecting && (
-            <View style={styles.center}>
-              <ActivityIndicator color={colors.primaryLight} />
-            </View>
-          )}
-
-          {isMissed && (
-            <View style={styles.endRow}>
-              <TouchableOpacity
-                style={styles.primaryBtn}
-                onPress={play}
-                disabled={!reminder}
-                accessibilityRole="button"
-                accessibilityLabel="Play message"
-                activeOpacity={0.85}
-              >
-                <Text style={styles.primaryBtnText}>Play message</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {showReady && (
-            <View style={styles.stopCol}>
-              <TouchableOpacity
-                onPress={play}
-                style={[styles.circle, { backgroundColor: colors.success }]}
-                accessibilityRole="button"
-                accessibilityLabel="Play message"
-                activeOpacity={0.85}
-              >
-                <Ionicons name="play" size={30} color={colors.white} />
-              </TouchableOpacity>
-              <Text style={styles.actionLabel}>Play message</Text>
-            </View>
-          )}
-
-          {showPlaying && (
-            <View style={styles.stopCol}>
-              <TouchableOpacity
-                onPress={stop}
-                style={[styles.circle, { backgroundColor: colors.error }]}
-                accessibilityRole="button"
-                accessibilityLabel="Stop call"
-                activeOpacity={0.85}
-              >
-                <Ionicons name="stop" size={30} color={colors.white} />
-              </TouchableOpacity>
-              <Text style={styles.actionLabel}>Stop</Text>
-            </View>
-          )}
-
-          {(showEnded || showError) && endButtons}
-        </View>
+        <View style={styles.bottom}>{bottom}</View>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -360,7 +561,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.regular,
     fontSize: fontSize.md,
     color: colors.white,
-    lineHeight: 22,
+    lineHeight: 24,
   },
   fallbackRow: {
     flexDirection: 'row',

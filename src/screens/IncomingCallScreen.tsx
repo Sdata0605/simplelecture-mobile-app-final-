@@ -1,10 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, StatusBar, BackHandler } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  StatusBar,
+  BackHandler,
+  AccessibilityInfo,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   Easing,
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -12,44 +21,83 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors, spacing, fontSize, fontFamily, borderRadius } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import RingingAvatar from '../components/callReminder/RingingAvatar';
 import { useRingtone } from '../hooks/useReminderCallAudio';
 import { useReduceMotion } from '../hooks/useReduceMotion';
-import { getReminder, markStatus } from '../services/callReminders';
-import type { CallReminder } from '../types/callReminder';
+import { getReminderLocal, markOutcome } from '../services/reminders';
+import type { Reminder } from '../types/reminder';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'IncomingCall'>;
 
 const RING_TIMEOUT_MS = 30000;
 const GRADIENT: [string, string] = ['#111827', '#1F2937'];
+const GLOW_DURATION_MS = 1200;
 
 export default function IncomingCallScreen({ navigation, route }: Props) {
   const { reminderId } = route.params;
   const reduceMotion = useReduceMotion();
   const [ringing, setRinging] = useState(true);
-  const [reminder, setReminder] = useState<CallReminder | null>(null);
+  const [reminder, setReminder] = useState<Reminder | null>(null);
   const handledRef = useRef(false);
+  const mountedRef = useRef(true);
 
   useRingtone(ringing);
 
   useEffect(() => {
-    let active = true;
-    getReminder(reminderId)
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Re-checks the reminder. If it was deleted while ringing, stop ringing and leave the screen.
+  const checkStillExists = useCallback(() => {
+    getReminderLocal(reminderId)
       .then((r) => {
-        if (active) setReminder(r);
+        if (!mountedRef.current) return;
+        if (!r) {
+          if (handledRef.current) return;
+          handledRef.current = true;
+          setRinging(false);
+          navigation.goBack();
+          return;
+        }
+        setReminder(r);
       })
       .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [reminderId]);
+  }, [reminderId, navigation]);
+
+  useEffect(() => {
+    checkStillExists();
+  }, [checkStillExists]);
+
+  useFocusEffect(
+    useCallback(() => {
+      checkStillExists();
+    }, [checkStillExists])
+  );
+
+  const text = reminder?.message_text?.trim() ?? '';
+
+  // Announce the incoming call once the reminder text is known (or not found).
+  const announcedRef = useRef(false);
+  useEffect(() => {
+    if (announcedRef.current) return;
+    if (!reminder && text === '') return;
+    announcedRef.current = true;
+    AccessibilityInfo.announceForAccessibility(
+      text ? `Incoming reminder call: ${text}` : 'Incoming reminder call'
+    );
+  }, [reminder, text]);
 
   // Gentle bounce on the Answer button.
   const bounce = useSharedValue(0);
   useEffect(() => {
     if (reduceMotion || !ringing) {
+      cancelAnimation(bounce);
       bounce.value = 0;
       return;
     }
@@ -66,21 +114,44 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
     transform: [{ translateY: bounce.value }],
   }));
 
+  // Glow ring behind the Answer button: primary at 0.25 opacity, scaling 1 to 1.25.
+  const glow = useSharedValue(0);
+  useEffect(() => {
+    if (reduceMotion || !ringing) {
+      cancelAnimation(glow);
+      glow.value = 0;
+      return;
+    }
+    glow.value = withRepeat(
+      withTiming(1, { duration: GLOW_DURATION_MS, easing: Easing.out(Easing.ease) }),
+      -1,
+      false
+    );
+  }, [reduceMotion, ringing, glow]);
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: 0.25 * (1 - glow.value),
+    transform: [{ scale: 1 + 0.25 * glow.value }],
+  }));
+
   const finish = (kind: 'answer' | 'decline' | 'missed') => {
     if (handledRef.current) return;
     handledRef.current = true;
-    setRinging(false);
+    if (mountedRef.current) setRinging(false);
 
-    if (kind === 'answer') {
-      markStatus(reminderId, 'answered').catch(() => {});
-      navigation.replace('ReminderCall', { reminderId, autoplay: true });
-    } else if (kind === 'decline') {
-      markStatus(reminderId, 'declined').catch(() => {});
+    if (kind === 'decline') {
+      markOutcome(reminderId, 'declined').catch(() => {});
       navigation.goBack();
-    } else {
-      markStatus(reminderId, 'missed').catch(() => {});
-      navigation.replace('ReminderCall', { reminderId, autoplay: false });
+      return;
     }
+    const outcome = kind === 'answer' ? 'answered' : 'missed';
+    markOutcome(reminderId, outcome).catch(() => {});
+    // The ReminderCall route type gains `mode` in WP8; cast until then.
+    const callParams = {
+      reminderId,
+      autoplay: kind === 'answer',
+      mode: 'call',
+    } as RootStackParamList['ReminderCall'];
+    navigation.replace('ReminderCall', callParams);
   };
 
   // Auto-missed after 30 s of ringing.
@@ -101,21 +172,19 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reminderId]);
 
-  const title = reminder?.title?.trim() || 'Study call';
-
   return (
     <LinearGradient colors={GRADIENT} style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.top}>
-          <Text style={styles.kicker}>Incoming study call</Text>
+          <Text style={styles.kicker}>Incoming reminder call</Text>
         </View>
 
         <View style={styles.middle}>
           <RingingAvatar ringing={ringing} size={120} />
           <Text style={styles.name}>Simple Lecture Teacher</Text>
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {title}
+          <Text style={styles.subtitle} numberOfLines={2}>
+            {text || 'Reminder'}
           </Text>
         </View>
 
@@ -135,15 +204,21 @@ export default function IncomingCallScreen({ navigation, route }: Props) {
 
           <View style={styles.actionCol}>
             <Animated.View style={answerStyle}>
-              <TouchableOpacity
-                onPress={() => finish('answer')}
-                style={[styles.circle, { backgroundColor: colors.success }]}
-                accessibilityRole="button"
-                accessibilityLabel="Answer call"
-                activeOpacity={0.8}
-              >
-                <Ionicons name="call" size={32} color={colors.white} />
-              </TouchableOpacity>
+              <View style={styles.answerWrap}>
+                <Animated.View
+                  pointerEvents="none"
+                  style={[styles.glow, glowStyle]}
+                />
+                <TouchableOpacity
+                  onPress={() => finish('answer')}
+                  style={[styles.circle, { backgroundColor: colors.success }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Answer call"
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="call" size={32} color={colors.white} />
+                </TouchableOpacity>
+              </View>
             </Animated.View>
             <Text style={styles.actionLabel}>Answer</Text>
           </View>
@@ -201,6 +276,19 @@ const styles = StyleSheet.create({
   actionCol: {
     alignItems: 'center',
     gap: spacing.sm,
+  },
+  answerWrap: {
+    width: 72,
+    height: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  glow: {
+    position: 'absolute',
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: colors.primary,
   },
   circle: {
     width: 72,

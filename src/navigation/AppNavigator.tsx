@@ -62,13 +62,13 @@ import MyNotesSubjectsScreen from '../screens/MyNotesSubjectsScreen';
 import MyNotesChapterScreen from '../screens/MyNotesChapterScreen';
 import AITeacherScreen from '../screens/AITeacherScreen';
 import AITeacherSettingsScreen from '../screens/AITeacherSettingsScreen';
-import CallRemindersScreen from '../screens/CallRemindersScreen';
+import RemindersScreen, { RemindersRouteParams } from '../screens/RemindersScreen';
 import IncomingCallScreen from '../screens/IncomingCallScreen';
 import ReminderCallScreen from '../screens/ReminderCallScreen';
-import { isCallRemindersEnabled } from '../constants/featureFlags';
+import { FEATURES } from '../constants/featureFlags';
 
-// Call-reminder routes are only registered when the feature flag is on.
-const CALL_REMINDERS_ON = isCallRemindersEnabled();
+// Reminders v2 routes are only registered when the feature flag is on (off in production).
+const REMINDERS_ON = FEATURES.reminders;
 
 export type MainTabParamList = {
   MyCourses: undefined;
@@ -193,9 +193,9 @@ export type RootStackParamList = {
   MyNotesChapter: { courseId: string; courseName?: string; subjectId: string; subjectName?: string; initialChapterId?: string };
   AITeacher: { initialSubject?: string } | undefined;
   AITeacherSettings: undefined;
-  CallReminders: undefined;
+  Reminders: RemindersRouteParams | undefined;
   IncomingCall: { reminderId: string };
-  ReminderCall: { reminderId: string; autoplay?: boolean };
+  ReminderCall: { reminderId: string; autoplay?: boolean; mode?: 'call' | 'message' };
 };
 
 export const navigationRef = createRef<NavigationContainerRef<RootStackParamList>>();
@@ -306,15 +306,15 @@ export default function AppNavigator() {
         <Stack.Screen name="MyNotesChapter" component={MyNotesChapterScreen} />
         <Stack.Screen name="AITeacher" component={AITeacherScreen} />
         <Stack.Screen name="AITeacherSettings" component={AITeacherSettingsScreen} />
-        {CALL_REMINDERS_ON && <Stack.Screen name="CallReminders" component={CallRemindersScreen} />}
-        {CALL_REMINDERS_ON && (
+        {REMINDERS_ON && <Stack.Screen name="Reminders" component={RemindersScreen} />}
+        {REMINDERS_ON && (
           <Stack.Screen
             name="IncomingCall"
             component={IncomingCallScreen}
             options={{ presentation: 'fullScreenModal', gestureEnabled: false, animation: 'fade' }}
           />
         )}
-        {CALL_REMINDERS_ON && (
+        {REMINDERS_ON && (
           <Stack.Screen
             name="ReminderCall"
             component={ReminderCallScreen}

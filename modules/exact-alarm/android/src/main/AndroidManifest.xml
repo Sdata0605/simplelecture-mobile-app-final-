@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Exact alarms for reminders. Do NOT declare USE_EXACT_ALARM (Play policy restricts it to alarm clock and calendar apps). -->
+  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+</manifest>

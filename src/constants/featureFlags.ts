@@ -6,6 +6,9 @@ import { Platform } from 'react-native';
  */
 export const FEATURES = {
   callReminders: false,
+  // Reminders v2. Only the development and preview EAS profiles set
+  // EXPO_PUBLIC_REMINDERS_V2=1 (eas.json), so production stays off.
+  reminders: process.env.EXPO_PUBLIC_REMINDERS_V2 === '1',
 } as const;
 
 /**

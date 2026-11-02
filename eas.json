@@ -7,12 +7,18 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_REMINDERS_V2": "1"
+      },
       "android": {
         "buildType": "apk",
         "credentialsSource": "remote"
       }
     },
     "preview": {
+      "env": {
+        "EXPO_PUBLIC_REMINDERS_V2": "1"
+      },
       "android": {
         "buildType": "apk",
         "credentialsSource": "remote"

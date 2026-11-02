@@ -17,6 +17,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.edulearn.mobile",
       "googleServicesFile": "./GoogleService-Info.plist",
+      "entitlements": {
+        "com.apple.developer.usernotifications.time-sensitive": true
+      },
       "infoPlist": {
         "UIBackgroundModes": [
           "remote-notification"
@@ -64,7 +67,7 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#2BBD6E",
-          "sounds": ["./assets/sounds/study_call_ring.wav"]
+          "sounds": ["./assets/sounds/study_call_ring.wav", "./assets/sounds/reminder_ring_27s.wav"]
         }
       ],
       "./plugins/withFirebaseMessagingFix",

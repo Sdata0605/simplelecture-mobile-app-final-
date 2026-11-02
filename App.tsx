@@ -40,14 +40,18 @@ import { GlobalAIButton } from './src/components/aiteacher/GlobalAIButton';
 import { setupAndScheduleNotifications, scheduleStudyReminders } from './src/services/scheduledNotifications';
 import AppNavigator, { navigationRef } from './src/navigation/AppNavigator';
 import { AskAIHost } from './src/components/askAssistant/AskAIHost';
-import CallReminderNotificationBridge from './src/components/callReminder/CallReminderNotificationBridge';
-import { isCallRemindersEnabled } from './src/constants/featureFlags';
+import ReminderNotificationBridge from './src/components/reminders/ReminderNotificationBridge';
+import { FEATURES, isCallRemindersEnabled } from './src/constants/featureFlags';
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
     // A call reminder in the foreground shows the in-app ringing screen, not a banner or sound.
-    const type = (notification.request.content.data as Record<string, unknown> | undefined)?.type;
-    if (type === 'call_reminder' && isCallRemindersEnabled()) {
+    const data = notification.request.content.data as Record<string, unknown> | undefined;
+    const type = data?.type;
+    const ringsInApp =
+      (type === 'call_reminder' && isCallRemindersEnabled()) ||
+      (type === 'reminder' && data?.kind === 'call' && FEATURES.reminders);
+    if (ringsInApp) {
       return { shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: true };
     }
     return {
@@ -175,7 +179,8 @@ function NotificationTapHandler() {
   }, []);
 
   const handleNotificationNavigation = (data: Record<string, any>) => {
-    // Call reminders are routed by CallReminderNotificationBridge (Answer / Decline / tap).
+    // Call reminders are routed by ReminderNotificationBridge (Answer / Decline / tap).
+    if (data?.type === 'reminder') return;
     if (data?.type === 'call_reminder' && isCallRemindersEnabled()) return;
     const nav = navigationRef.current;
     if (!nav?.isReady()) return;
@@ -240,7 +245,7 @@ export default function App() {
             <StatusBar style="light" />
             <NotificationScheduler />
             <NotificationTapHandler />
-            <CallReminderNotificationBridge />
+            <ReminderNotificationBridge />
             <SidebarProvider>
               <AppNavigator />
               <GlobalAIButton />

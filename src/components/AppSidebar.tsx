@@ -16,12 +16,12 @@ import { useSidebar } from '../context/SidebarContext';
 import { navigationRef } from '../navigation/AppNavigator';
 import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
 import { openAskAI } from '../services/askAIStore';
-import { isCallRemindersEnabled } from '../constants/featureFlags';
+import { FEATURES } from '../constants/featureFlags';
 
 const { width } = Dimensions.get('window');
 const PANEL_WIDTH = Math.min(width * 0.78, 320);
 
-type MenuItem = { icon: string; label: string; route: string; flag?: 'callReminders' };
+type MenuItem = { icon: string; label: string; route: string; flag?: 'reminders' };
 
 const MENU_ITEMS: MenuItem[] = [
   { icon: 'home', label: 'Home', route: 'Home' },
@@ -33,7 +33,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: 'videocam', label: 'Live Classes', route: 'LiveClasses' },
   { icon: 'trophy', label: 'My Rewards', route: 'MyRewards' },
   { icon: 'calendar', label: 'Timetable', route: 'StudyTimetable' },
-  { icon: 'call', label: 'Call reminders', route: 'CallReminders', flag: 'callReminders' },
+  { icon: 'alarm', label: 'Reminders', route: 'Reminders', flag: 'reminders' },
   { icon: 'clipboard', label: 'My Test', route: 'MyTests' },
   { icon: 'chatbubbles', label: 'Forum', route: 'Forum' },
   { icon: 'newspaper', label: 'Blog', route: 'Blog' },
@@ -169,7 +169,7 @@ export default function AppSidebar() {
             <View style={styles.sidebarMenu}>
               {MENU_ITEMS.filter((item) => {
                 if (item.route === 'AITeacher' && !hasActivePlan) return false;
-                if (item.flag === 'callReminders' && !isCallRemindersEnabled()) return false;
+                if (item.flag === 'reminders' && !FEATURES.reminders) return false;
                 return true;
               }).map((item) => {
                 const active = currentRoute === item.route;
