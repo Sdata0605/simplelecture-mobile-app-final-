@@ -30,8 +30,6 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: 'create', label: 'My Notes', route: 'MyNotes' },
   { icon: 'school', label: 'AI Teacher', route: 'AITeacher' },
   { icon: 'compass', label: 'Explore Courses', route: 'Courses' },
-  { icon: 'videocam', label: 'Live Classes', route: 'LiveClasses' },
-  { icon: 'trophy', label: 'My Rewards', route: 'MyRewards' },
   { icon: 'calendar', label: 'Timetable', route: 'StudyTimetable' },
   { icon: 'alarm', label: 'Reminders', route: 'Reminders', flag: 'reminders' },
   { icon: 'clipboard', label: 'My Test', route: 'MyTests' },
