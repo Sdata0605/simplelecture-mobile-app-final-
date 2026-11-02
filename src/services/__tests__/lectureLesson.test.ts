@@ -68,7 +68,7 @@ describe('buildLectureOpening', () => {
     expect(buildLectureOpening({ trigger: 'mid', subjectName: 'Science', context: null })).toContain('never use create_document');
     const end = buildLectureOpening({ trigger: 'end', subjectName: 'Science', topicTitle: 'Light', context: ctx });
     expect(end).toContain('I just finished watching');
-    expect(end).toContain('3-question quiz');
+    expect(end).toContain('if I have any questions');
   });
 
   it('asks for the lecture language, in its mixed classroom style, only when the student setting is auto', () => {

@@ -87,7 +87,7 @@ export function buildLectureOpening(input: LectureOpeningInput): string {
   const rules: string[] = [`My subject is already chosen (${subjectName}), so never ask which subject I want.`];
   if (trigger === "end") {
     rules.push(
-      "Say in one short sentence that the lecture is over and ask if I have any doubts. Offer a quick 3-question quiz on this lecture (one show_quiz question at a time).",
+      "Say in one short, friendly sentence that the lecture is over and ask directly if I have any questions. Then wait for my answer. Do not offer a quiz.",
     );
   } else {
     rules.push("Greet me in one short sentence and ask what I am unsure about.");

@@ -25,7 +25,6 @@ import { useTeacherSubject } from '../hooks/useTeacherSubject';
 import { useEndOfLecturePrompt } from '../hooks/useEndOfLecturePrompt';
 import { useAuth } from '../context/AuthContext';
 import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
-import V5EndAskPrompt from '../components/v5/V5EndAskPrompt';
 import { buildAskContext } from '../services/askAssistant/lectureContext';
 import type { LectureAskContext } from '../services/askAssistant/lectureLesson';
 import { openAskAI } from '../services/askAIStore';
@@ -415,6 +414,12 @@ export default function V5PlayerScreen() {
     endPrompt.accept();
     openEndAskAI();
   }, [endPrompt.accept, openEndAskAI]);
+
+  // No card: when the lecture is really finished, the AI conversation starts by itself
+  // and asks the student if they have any questions.
+  useEffect(() => {
+    if (endPrompt.visible) handleEndAskYes();
+  }, [endPrompt.visible, handleEndAskYes]);
 
   const cycleSpeed = useCallback(() => {
     setPlaybackRate((rate) => {
@@ -848,13 +853,6 @@ export default function V5PlayerScreen() {
         onFlushReady={(flush) => {
           notesFlushRef.current = flush;
         }}
-      />
-
-      <V5EndAskPrompt
-        visible={endPrompt.visible}
-        lectureTitle={title}
-        onYes={handleEndAskYes}
-        onDismiss={endPrompt.decline}
       />
 
       {askAIOpen && !!teacherSubject && (
