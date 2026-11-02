@@ -189,7 +189,7 @@ export default function StudyPlanCreateScreen() {
       // The plan exists now. A channel failure must not look like a failed save (spec C.1 step 10).
       // 'none' goes through the service's own fallback (null until the DB migration is applied).
       let channelFailed = false;
-      if (remindersOn) {
+      if (remindersOn && state.reminder !== null) {
         try {
           if (!res.timetable_id) throw new Error('missing timetable_id');
           await applyPlanChannel(res.timetable_id, state.reminder);
@@ -293,7 +293,7 @@ export default function StudyPlanCreateScreen() {
   const successLine = [
     sessions !== undefined ? `${sessions} session${sessions === 1 ? '' : 's'}` : null,
     `from ${formatDayMonth(state.startDate)} to ${formatDayMonth(state.deadline)}`,
-    remindersOn ? `Reminders by ${REMINDER_LABEL[state.reminder]}` : null,
+    remindersOn && state.reminder ? `Reminders by ${REMINDER_LABEL[state.reminder]}` : null,
   ].filter(Boolean).join(' · ');
 
   return (

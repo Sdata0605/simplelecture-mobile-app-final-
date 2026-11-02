@@ -32,7 +32,7 @@ export interface WizardState {
   chapterId: string | null; topicId: string | null;
   startDate: string; deadline: string;              // 'YYYY-MM-DD' local
   weekday: DayWindows; weekendMode: WeekendMode; saturday: DayWindows; sunday: DayWindows;
-  reminder: ReminderChoice;                          // default 'notification'
+  reminder: ReminderChoice | null;                   // null = not chosen yet; the reminder step is compulsory
   pattern: PatternId; feedbackMessage: string;
   returnToReview: boolean; dirty: boolean;
   status: 'editing' | 'saving' | 'saved' | 'error'; error: string | null;
@@ -235,7 +235,7 @@ export function initialState(p: { courseId: string | null; courseName: string; r
     weekendMode: 'same',
     saturday: cloneDay(WEEKEND_DEFAULT),
     sunday: cloneDay(WEEKEND_DEFAULT),
-    reminder: 'notification',
+    reminder: null,
     pattern: 'sequential',
     feedbackMessage: '',
     returnToReview: false,
@@ -314,8 +314,10 @@ export function validateStep(s: WizardState, step: StepId, ctx: StepContext): St
       return OK;
     }
     case 'reminder':
+      if (s.reminder === null) return fail('Pick a reminder, or No reminders');
       return OK;
     case 'review': {
+      if (s.steps.includes('reminder') && s.reminder === null) return fail('Pick a reminder, or No reminders');
       if (ctx.feasibility === null) return fail('Checking your plan...');
       if (ctx.feasibility === 'too_short') return fail('Add more study time or move the finish date');
       return OK;
@@ -330,13 +332,13 @@ function currentStep(s: WizardState): StepId {
 }
 
 /**
- * `next` only refuses to leave the dates and times steps when their state is invalid.
+ * `next` only refuses to leave the dates, times and reminder steps when their state is invalid.
  * Scope (needs the loaded lecture list) and review (needs the feasibility check) are gated
  * by the screen through validateStep with the real context. The past-date check is skipped
  * here so the reducer does not depend on the clock.
  */
 function reducerGuard(s: WizardState, step: StepId): boolean {
-  if (step !== 'dates' && step !== 'times') return true;
+  if (step !== 'dates' && step !== 'times' && step !== 'reminder') return true;
   return validateStep(s, step, { contentItems: 1, contentLoading: false, feasibility: 'ok', today: '0000-01-01' }).ok;
 }
 

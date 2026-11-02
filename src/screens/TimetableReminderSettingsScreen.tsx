@@ -1,7 +1,7 @@
 // Reminder settings for study plans (WP4). Change the default channel for a whole plan, or one session.
 // Every change saves at once and can be undone from the snackbar.
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -110,6 +110,42 @@ export default function TimetableReminderSettingsScreen() {
   const needsNotifications =
     perms.notifications === 'denied' &&
     (defaultValue === 'call' || defaultValue === 'message' || defaultValue === 'notification');
+
+  // Master switch for the whole course. Off = every upcoming pending session of every plan goes to 'none'
+  // (plan defaults kept, so On can restore them). On = sessions that are 'none' go back to their plan default.
+  // The switch reads the selected plan's loaded sessions: it shows Off only when all of them are 'none'.
+  const masterOff = sessions.length > 0 && sessions.every(s => s.reminder_channel === 'none');
+  const masterOn = plans.length > 0 && !masterOff;
+
+  async function onToggleMaster(on: boolean) {
+    if (busy || plans.length === 0 || on === masterOn) return;
+    setBusy(true);
+    let noneUnsupported = false;
+    try {
+      for (const p of plans) {
+        if (!on) {
+          const r = await applyPlanChannel(p.id, 'none', { keepDefault: true });
+          noneUnsupported = noneUnsupported || r.noneUnsupported;
+        } else {
+          const planSessions = p.id === selectedPlanId ? sessions : await fetchUpcomingSessions(p.id, LOAD_LIMIT);
+          const d = planDefaultChannel(p, planSessions);
+          // 'none', 'mixed' or nothing stored cannot be restored, so fall back to the wizard default.
+          const target: ReminderChoice = isReminderChoice(d) && d !== 'none' ? d : 'notification';
+          await applyPlanChannel(p.id, target, { onlyMatching: 'none' });
+        }
+      }
+      setBusy(false);
+      setReloadKey(k => k + 1);
+      void plansQuery.refetch();
+      if (!on && noneUnsupported) {
+        Alert.alert('Could not turn off', 'Reminders could not be turned off yet. Try again later.');
+      }
+    } catch {
+      setBusy(false);
+      setReloadKey(k => k + 1);
+      Alert.alert('Could not save', 'Check your internet and try again.');
+    }
+  }
 
   function showUndo(message: string, run: () => Promise<void>) {
     setUndo({ id: Date.now(), message, run });
@@ -226,19 +262,41 @@ export default function TimetableReminderSettingsScreen() {
         <View style={styles.pad}>
           <PermissionBanner variant="sync-error" onAction={() => void plansQuery.refetch()} />
         </View>
-      ) : plans.length === 0 ? (
-        <View style={styles.pad}>
-          <EmptyState
-            icon="calendar-outline"
-            title="No study plan yet"
-            body="Create a plan to set reminders."
-          />
-        </View>
       ) : (
         <ScrollView
           contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 96 }]}
           keyboardShouldPersistTaps="handled"
         >
+          <View style={styles.masterCard}>
+            <View style={styles.masterText}>
+              <Text style={styles.masterTitle} accessibilityRole="header">Timetable reminders</Text>
+              <Text style={styles.helper}>
+                {plans.length === 0
+                  ? 'Create a study plan to turn on reminders.'
+                  : masterOn
+                    ? 'Turn off to stop reminders for every upcoming session in this course.'
+                    : 'Reminders are off. Turn on to use each plan default again.'}
+              </Text>
+            </View>
+            <Switch
+              value={masterOn}
+              onValueChange={v => void onToggleMaster(v)}
+              disabled={busy || plans.length === 0}
+              accessibilityLabel="Timetable reminders on/off"
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor={colors.white}
+            />
+          </View>
+
+          {plans.length === 0 ? (
+            <EmptyState
+              icon="calendar-outline"
+              title="No study plan yet"
+              body="Create a plan to set reminders. Your reminder settings will appear here."
+            />
+          ) : null}
+
+          {plans.length > 0 ? (<>
           {plans.length > 1 ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.planChips}>
               {plans.map(p => {
@@ -267,7 +325,7 @@ export default function TimetableReminderSettingsScreen() {
 
           <Text style={styles.sectionTitle} accessibilityRole="header">Default for this plan</Text>
           <Text style={styles.helper}>
-            Changing this updates every upcoming session that still follows the plan.
+            Current default: {summary === 'mixed' ? 'Mixed' : channelLabel(defaultValue)}. Changing it updates every upcoming session that still follows the plan.
           </Text>
           <ChannelOptions value={defaultValue} onChange={onPickDefault} disabled={busy} />
           {summary === 'mixed' ? (
@@ -341,6 +399,7 @@ export default function TimetableReminderSettingsScreen() {
               <Text style={styles.showMoreText}>Show more</Text>
             </TouchableOpacity>
           ) : null}
+          </>) : null}
         </ScrollView>
       )}
 
@@ -380,6 +439,18 @@ const styles = StyleSheet.create({
   center: { paddingVertical: spacing.xl, alignItems: 'center' },
   pad: { padding: spacing.md },
   content: { padding: spacing.md, gap: spacing.sm },
+  masterCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  masterText: { flex: 1, gap: 2 },
+  masterTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text },
   planChips: { gap: spacing.sm, paddingVertical: spacing.xs },
   planChip: {
     minHeight: 44,

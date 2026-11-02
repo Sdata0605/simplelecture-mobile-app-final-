@@ -4,10 +4,11 @@ import { colors, spacing, fontSize, fontFamily } from '../../../constants/theme'
 import ReminderChannelPicker from '../ReminderChannelPicker';
 import { PermissionBanner } from '../../reminders/PermissionBanner';
 
-// Plan wizard step: "How should we remind you?" Notification is the default (set by the reducer).
+// Plan wizard step: "How should we remind you?" Compulsory: nothing is selected until the student picks
+// one option (Next stays disabled until then, see validateStep 'reminder').
 
 interface StepReminderProps {
-  value: ReminderChoice;
+  value: ReminderChoice | null;
   onChange: (value: ReminderChoice) => void;
   hasEmail: boolean;
   permission: 'granted' | 'denied' | 'undetermined';
@@ -24,6 +25,7 @@ export function StepReminder({
   onOpenSettings,
 }: StepReminderProps) {
   const isSound = value === 'call' || value === 'message' || value === 'notification';
+  // Both gates are false until a choice exists, so no banner shows on the untouched step.
   const showNotifBanner = isSound && permission === 'denied';
   const showExactBanner = value === 'call' && !exactAlarmOk;
 

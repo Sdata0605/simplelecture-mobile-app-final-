@@ -41,9 +41,9 @@ describe('buildSteps', () => {
 });
 
 describe('initial state', () => {
-  it('defaults the reminder channel to notification and starts clean', () => {
+  it('starts with no reminder chosen and starts clean', () => {
     const s = fresh(true);
-    expect(s.reminder).toBe('notification');
+    expect(s.reminder).toBeNull();
     expect(s.stepIndex).toBe(0);
     expect(s.dirty).toBe(false);
     expect(s.status).toBe('editing');
@@ -212,6 +212,19 @@ describe('reminder choice', () => {
     const s = run(fresh(), { type: 'setReminder', value: 'none' });
     expect(s.reminder).toBe('none');
   });
+
+  it('the reminder step is invalid until a choice is made', () => {
+    const s = fresh(true);
+    expect(validateStep(s, 'reminder', OK_CTX).ok).toBe(false);
+    const picked = run(s, { type: 'setReminder', value: 'none' });
+    expect(validateStep(picked, 'reminder', OK_CTX).ok).toBe(true);
+  });
+
+  it('next does not leave the reminder step without a choice', () => {
+    const s = run(fresh(true), { type: 'next' }, { type: 'next' }, { type: 'next' });
+    expect(s.steps[s.stepIndex]).toBe('reminder');
+    expect(run(s, { type: 'next' }).steps[s.stepIndex]).toBe('reminder');
+  });
 });
 
 describe('dirty flag, saving and reset', () => {
@@ -234,7 +247,7 @@ describe('dirty flag, saving and reset', () => {
   it('reset restores the initial state, so a second wizard starts clean', () => {
     const edited = run(fresh(), { type: 'setReminder', value: 'call' }, { type: 'next' });
     const reset = run(edited, { type: 'reset' });
-    expect(reset.reminder).toBe('notification');
+    expect(reset.reminder).toBeNull();
     expect(reset.stepIndex).toBe(0);
     expect(reset.dirty).toBe(false);
   });
@@ -247,7 +260,7 @@ describe('review step', () => {
   });
 
   it('ok feasibility allows Create', () => {
-    const check = validateStep(fresh(), 'review', { contentItems: 130, contentLoading: false, feasibility: 'ok' });
+    const check = validateStep(run(fresh(), { type: 'setReminder', value: 'notification' }), 'review', { contentItems: 130, contentLoading: false, feasibility: 'ok' });
     expect(check.ok).toBe(true);
   });
 });

@@ -261,6 +261,15 @@ export default function StudyTimetableScreen() {
     ]);
   }
 
+  function openReminderSettings() {
+    const courseId = selectedCourseId ?? enrolledCourses[0]?.id ?? null;
+    if (!courseId) {
+      Alert.alert('No course yet', 'Enrol in a course to set timetable reminders.');
+      return;
+    }
+    navigation.navigate('TimetableReminderSettings', { courseId });
+  }
+
   const dayDetailSessions = selectedDay ? sessionsOnDay(selectedDay) : [];
   const dayDetailTests = selectedDay ? testsOnDay(selectedDay) : [];
 
@@ -275,6 +284,16 @@ export default function StudyTimetableScreen() {
       >
         <View style={{ width: 36 }} />
         <Text style={styles.headerTitle}>Timetable</Text>
+        {FEATURES.timetableReminders && (
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={openReminderSettings}
+            accessibilityRole="button"
+            accessibilityLabel="Reminder settings"
+          >
+            <Ionicons name="notifications-outline" size={22} color={colors.white} />
+          </TouchableOpacity>
+        )}
         <HeaderMenuButton onPress={openSidebar} />
       </LinearGradient>
 
@@ -1176,6 +1195,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 4, gap: spacing.sm,
   },
   headerTitle: { flex: 1, fontSize: fontSize.xl, fontFamily: fontFamily.heading, color: colors.white },
+  headerIconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
 
   body: { flex: 1 },
 

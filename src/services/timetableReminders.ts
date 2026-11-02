@@ -54,12 +54,13 @@ function upcomingFilter(planId: string, nowIso: string): string {
 /**
  * Sets the channel on every upcoming pending study session of a plan, then stores the default in plan_metadata.
  * opts.onlyMatching: undefined = all upcoming sessions; null = only sessions with no channel; a value = only sessions on that channel.
+ * opts.keepDefault: true = change the sessions only and leave the stored plan default alone (used by the master Off switch).
  * Returns how many sessions changed, and noneUnsupported when the 'none' write fell back to null.
  */
 export async function applyPlanChannel(
   planId: string,
   choice: ReminderChoice,
-  opts?: { onlyMatching?: ReminderChoice | null },
+  opts?: { onlyMatching?: ReminderChoice | null; keepDefault?: boolean },
 ): Promise<{ changed: number; noneUnsupported: boolean }> {
   const nowIso = new Date().toISOString();
   let filter = upcomingFilter(planId, nowIso);
@@ -70,6 +71,8 @@ export async function applyPlanChannel(
   const { result: changed, noneUnsupported } = await withNoneFallback(choice, value =>
     patchSessions(filter, { reminder_channel: value, updated_at: nowIso }),
   );
+
+  if (opts?.keepDefault) return { changed, noneUnsupported };
 
   const rows = await restFetch<Pick<StudyTimetablePlan, 'plan_metadata'>>(
     `study_timetables?select=plan_metadata&id=eq.${planId}`,

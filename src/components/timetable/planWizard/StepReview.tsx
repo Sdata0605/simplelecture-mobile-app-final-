@@ -47,7 +47,7 @@ export default function StepReview({
     { key: 'Daily', value: `~${estimateDailyHours(state)} h a day`, step: 'times' },
   ];
   if (state.steps.includes('reminder')) {
-    rows.push({ key: 'Reminders', value: REMINDER_LABEL[state.reminder], step: 'reminder' });
+    rows.push({ key: 'Reminders', value: state.reminder ? REMINDER_LABEL[state.reminder] : 'Not set', step: 'reminder' });
   }
 
   return (
