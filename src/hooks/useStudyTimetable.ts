@@ -3,6 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, AUTH_TOKEN_KEY, getValidAccessToken } from '../services/supabase';
 import type { ReminderChannel } from '../types/reminder';
 
+// 'none' = student turned reminders off for this session. Needs the 'none' migration (see services/timetableReminders).
+export type ReminderChoiceValue = ReminderChannel | 'none';
+
 export async function authHeaders(): Promise<Record<string, string>> {
   const token = await getValidAccessToken();
   return {
@@ -69,8 +72,8 @@ export interface StudyTimetableSession {
   created_at: string;
   updated_at: string;
   session_type?: 'study' | 'test' | null;
-  // Channel for this session's reminder. null (empty) means no reminder.
-  reminder_channel?: ReminderChannel | null;
+  // Channel for this session's reminder. null means legacy behaviour (not off); 'none' means off.
+  reminder_channel?: ReminderChoiceValue | null;
 }
 
 export interface SelfTest {
@@ -193,6 +196,26 @@ export async function patchSession(
     const err = await res.text();
     throw new Error(err);
   }
+}
+
+/** Bulk PATCH of study sessions matching a PostgREST filter (e.g. 'timetable_id=eq.X&status=eq.pending'). Returns rows changed. */
+export async function patchSessions(
+  filter: string,
+  patch: Partial<Pick<StudyTimetableSession, 'reminder_channel'>> & { updated_at?: string },
+): Promise<number> {
+  const rows = await restFetch<{ id: string }>(
+    `study_timetable_sessions?${filter}`,
+    { method: 'PATCH', body: JSON.stringify(patch) },
+  );
+  return rows.length;
+}
+
+/** Replace a plan's plan_metadata (jsonb). Callers merge the old object first. */
+export async function patchPlanMetadata(planId: string, merged: StudyTimetablePlanMetadata): Promise<void> {
+  await restFetch<StudyTimetablePlan>(
+    `study_timetables?id=eq.${planId}`,
+    { method: 'PATCH', body: JSON.stringify({ plan_metadata: merged, updated_at: new Date().toISOString() }) },
+  );
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {

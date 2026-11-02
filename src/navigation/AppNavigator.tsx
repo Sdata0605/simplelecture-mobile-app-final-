@@ -54,6 +54,8 @@ import V5PlayerScreen from '../screens/V5PlayerScreen';
 import MyRewardsScreen from '../screens/MyRewardsScreen';
 import CoursePreviewScreen from '../screens/CoursePreviewScreen';
 import StudyTimetableScreen from '../screens/StudyTimetableScreen';
+import StudyPlanCreateScreen from '../screens/StudyPlanCreateScreen';
+import TimetableReminderSettingsScreen from '../screens/TimetableReminderSettingsScreen';
 import MyTestsScreen from '../screens/MyTestsScreen';
 import MyTestTakeScreen from '../screens/MyTestTakeScreen';
 import MyTestResultScreen from '../screens/MyTestResultScreen';
@@ -186,6 +188,8 @@ export type RootStackParamList = {
   MyRewards: undefined;
   CoursePreview: { courseId: string; courseName: string; courseSlug: string };
   StudyTimetable: undefined;
+  StudyPlanCreate: { courseId: string; courseName: string };
+  TimetableReminderSettings: { courseId: string; planId?: string };
   MyTests: undefined;
   MyTestTake: { testId: string };
   MyTestResult: { testId: string };
@@ -299,6 +303,10 @@ export default function AppNavigator() {
         <Stack.Screen name="MyRewards" component={MyRewardsScreen} />
         <Stack.Screen name="CoursePreview" component={CoursePreviewScreen} />
         <Stack.Screen name="StudyTimetable" component={StudyTimetableScreen} />
+        <Stack.Screen name="StudyPlanCreate" component={StudyPlanCreateScreen} />
+        {FEATURES.timetableReminders && (
+          <Stack.Screen name="TimetableReminderSettings" component={TimetableReminderSettingsScreen} />
+        )}
         <Stack.Screen name="MyTests" component={MyTestsScreen} />
         <Stack.Screen name="MyTestTake" component={MyTestTakeScreen} />
         <Stack.Screen name="MyTestResult" component={MyTestResultScreen} />

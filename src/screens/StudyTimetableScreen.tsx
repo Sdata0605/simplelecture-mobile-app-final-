@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -26,8 +26,7 @@ import { useSidebar } from '../context/SidebarContext';
 import HeaderMenuButton from '../components/HeaderMenuButton';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { useAuth } from '../context/AuthContext';
-import { supabase, AUTH_TOKEN_KEY, SUPABASE_URL, SUPABASE_ANON_KEY } from '../services/supabase';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../services/supabase';
 import {
   useStudyTimetablePlans,
   useStudyTimetableSessions,
@@ -42,9 +41,14 @@ import {
 import { scheduleStudyReminders } from '../services/scheduledNotifications';
 import AutoChapterTestBanner from '../components/AutoChapterTestBanner';
 import ReminderChannelPicker from '../components/timetable/ReminderChannelPicker';
+import PlanReminderRow from '../components/timetable/PlanReminderRow';
+import SessionChannelSheet from '../components/timetable/SessionChannelSheet';
+import SimpleSelect from '../components/timetable/SimpleSelect';
+import { useSubjectsForCourse, useChaptersForSubject, useTopicsForChapter } from '../hooks/useScopeContent';
+import { planDefaultChannel } from '../services/timetableReminders';
 import { KIND_STYLE, EMAIL_STYLE } from '../components/reminders/palette';
 import { FEATURES } from '../constants/featureFlags';
-import type { ReminderChannel } from '../types/reminder';
+import type { ReminderChannel, ReminderChoice } from '../types/reminder';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -53,8 +57,8 @@ const CHANNEL_CHIP_LABEL: Record<ReminderChannel, string> = {
   call: 'Call', message: 'Text', notification: 'Notification', email: 'Email',
 };
 
-function channelChipStyle(channel: ReminderChannel | null | undefined) {
-  if (!channel) return { fg: colors.textMuted, bg: '#F3F4F6', icon: 'notifications-off-outline', label: 'Off' };
+function channelChipStyle(channel: ReminderChoice | null | undefined) {
+  if (!channel || channel === 'none') return { fg: colors.textMuted, bg: '#F3F4F6', icon: 'notifications-off-outline', label: 'Off' };
   const k =
     channel === 'call' ? KIND_STYLE.call :
     channel === 'message' ? KIND_STYLE.message :
@@ -135,104 +139,7 @@ function AmberGlowPill() {
   );
 }
 
-// ─── SimpleSelect ─────────────────────────────────────────────────────────────
-
 interface SelectOption { id: string; name: string }
-
-function SimpleSelect({
-  label, options, value, onChange, placeholder, loading,
-}: {
-  label: string;
-  options: SelectOption[];
-  value: string | null;
-  onChange: (id: string | null) => void;
-  placeholder?: string;
-  loading?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const selected = options.find(o => o.id === value);
-  return (
-    <View style={{ marginBottom: 8 }}>
-      <Text style={styles.inputLabel}>{label}</Text>
-      <TouchableOpacity style={styles.selectBox} onPress={() => setOpen(true)}>
-        {loading
-          ? <ActivityIndicator size="small" color={colors.primary} />
-          : <Text style={selected ? styles.selectValue : styles.selectPlaceholder} numberOfLines={1}>
-              {selected ? selected.name : (placeholder ?? 'Select…')}
-            </Text>
-        }
-        <Ionicons name="chevron-down" size={16} color={colors.textMuted} />
-      </TouchableOpacity>
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <TouchableOpacity style={styles.selectOverlay} onPress={() => setOpen(false)} activeOpacity={1}>
-          <TouchableOpacity style={styles.selectDropdown} activeOpacity={1}>
-            <ScrollView
-              style={styles.selectDropdownScroll}
-              nestedScrollEnabled
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator
-              contentContainerStyle={styles.selectDropdownContent}
-            >
-              <TouchableOpacity style={styles.selectOption} onPress={() => { onChange(null); setOpen(false); }}>
-                <Text style={styles.selectOptionText}>— None —</Text>
-                {value === null && <Ionicons name="checkmark" size={18} color={colors.primary} />}
-              </TouchableOpacity>
-              {options.map(o => (
-                <TouchableOpacity key={o.id} style={[styles.selectOption, value === o.id && styles.selectOptionActive]}
-                  onPress={() => { onChange(o.id); setOpen(false); }}>
-                  <Text style={[styles.selectOptionText, value === o.id && styles.selectOptionTextActive]} numberOfLines={1}>{o.name}</Text>
-                  {value === o.id && <Ionicons name="checkmark" size={18} color={colors.primary} />}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-    </View>
-  );
-}
-
-// ─── useSubjectsForCourse ─────────────────────────────────────────────────────
-
-function useSubjectsForCourse(courseId: string | null) {
-  const [subjects, setSubjects] = useState<SelectOption[]>([]);
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!courseId) { setSubjects([]); return; }
-    setLoading(true);
-    supabase.getCourseSubjects(courseId).then(res => {
-      if (res.success && res.subjects) {
-        setSubjects(res.subjects.map(s => ({ id: s.subject.id, name: s.subject.name })));
-      }
-      setLoading(false);
-    });
-  }, [courseId]);
-  return { subjects, loading };
-}
-
-function useChaptersForSubject(subjectId: string | null) {
-  const [chapters, setChapters] = useState<SelectOption[]>([]);
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!subjectId) { setChapters([]); return; }
-    let cancelled = false;
-    setLoading(true);
-    fetch(
-      `${SUPABASE_URL}/rest/v1/subject_chapters?select=id,title,chapter_number&subject_id=eq.${subjectId}&order=chapter_number.asc`,
-      { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
-    )
-      .then(r => r.json())
-      .then(data => {
-        if (!cancelled && Array.isArray(data)) {
-          setChapters(data.map((c: any) => ({ id: c.id, name: c.title })));
-        }
-      })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [subjectId]);
-  return { chapters, loading };
-}
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
@@ -253,7 +160,6 @@ export default function StudyTimetableScreen() {
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
 
   const [showDaySheet, setShowDaySheet] = useState(false);
-  const [showAIModal, setShowAIModal] = useState(false);
   const [showTestModal, setShowTestModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'timetable' | 'test'>('timetable');
 
@@ -286,6 +192,21 @@ export default function StudyTimetableScreen() {
     if (sessionsQuery.isLoading) return;
     scheduleStudyReminders();
   }, [sessionsQuery.data, sessionsQuery.isLoading]);
+
+  // Pick up plans and sessions created or re-channelled on the full-screen wizard or
+  // the reminder settings screen when this screen regains focus.
+  useFocusEffect(useCallback(() => {
+    plansQuery.refetch();
+    sessionsQuery.refetch();
+  }, [plansQuery.refetch, sessionsQuery.refetch]));
+
+  /** Default channel of the plan a session belongs to (null when mixed or unknown). */
+  function planDefaultFor(s: StudyTimetableSession): ReminderChoice | null {
+    const plan = plansQuery.data.find(p => p.id === s.timetable_id);
+    if (!plan) return null;
+    const d = planDefaultChannel(plan, sessionsQuery.data);
+    return d === 'mixed' ? null : d;
+  }
 
   const calGrid = buildCalendarGrid(calYear, calMonth); // always 42 cells
 
@@ -431,9 +352,20 @@ export default function StudyTimetableScreen() {
                       <View style={[styles.modeBadge, isAI ? styles.modeBadgeAI : styles.modeBadgeManual]}>
                         <Text style={styles.modeBadgeText}>{isAI ? 'AI Auto' : 'Manual'}</Text>
                       </View>
-                      <TouchableOpacity onPress={() => confirmDeletePlan(plan.id, planTitle)}>
-                        <Ionicons name="trash-outline" size={16} color="#A78BFA" />
-                      </TouchableOpacity>
+                      <View style={styles.planCardActions}>
+                        {FEATURES.timetableReminders && (
+                          <TouchableOpacity
+                            onPress={() => navigation.navigate('TimetableReminderSettings', { courseId: plan.course_id, planId: plan.id })}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Reminder settings for ${planTitle}`}
+                          >
+                            <Ionicons name="notifications-outline" size={16} color="#A78BFA" />
+                          </TouchableOpacity>
+                        )}
+                        <TouchableOpacity onPress={() => confirmDeletePlan(plan.id, planTitle)}>
+                          <Ionicons name="trash-outline" size={16} color="#A78BFA" />
+                        </TouchableOpacity>
+                      </View>
                     </View>
                     <Text style={styles.planCardTitle} numberOfLines={2}>{planTitle}</Text>
                     {planDeadline && (
@@ -476,6 +408,22 @@ export default function StudyTimetableScreen() {
             }}
           />
         )}
+
+        {FEATURES.timetableReminders && (() => {
+          const reminderPlan = plansQuery.data.find(p => p.id === selectedPlanId) ?? plansQuery.data[0];
+          if (!reminderPlan) return null;
+          const meta = reminderPlan.plan_metadata ?? {};
+          const planTitle = meta.scopeLabel || (reminderPlan.mode === 'auto' ? 'AI Study Plan' : 'Study Plan');
+          return (
+            <View style={styles.reminderRowWrap}>
+              <PlanReminderRow
+                planTitle={planTitle}
+                summary={planDefaultChannel(reminderPlan, sessionsQuery.data)}
+                onPress={() => navigation.navigate('TimetableReminderSettings', { courseId: reminderPlan.course_id, planId: reminderPlan.id })}
+              />
+            </View>
+          );
+        })()}
 
         {/* Calendar */}
         <View style={styles.calendarCard}>
@@ -609,11 +557,18 @@ export default function StudyTimetableScreen() {
               </Text>
               <TouchableOpacity
                 style={styles.wizardCardBtn}
-                onPress={() => setShowAIModal(true)}
+                onPress={() => {
+                  if (!selectedCourseId) return;
+                  navigation.navigate('StudyPlanCreate', {
+                    courseId: selectedCourseId,
+                    courseName: enrolledCourses.find(c => c.id === selectedCourseId)?.name ?? 'Course',
+                  });
+                }}
+                disabled={!selectedCourseId}
                 activeOpacity={0.85}
               >
                 <Ionicons name="sparkles" size={16} color={colors.white} />
-                <Text style={styles.wizardCardBtnText}>Start AI plan</Text>
+                <Text style={styles.wizardCardBtnText}>Create study plan</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -649,14 +604,7 @@ export default function StudyTimetableScreen() {
         sessions={dayDetailSessions}
         tests={dayDetailTests}
         onSessionUpdate={() => sessionsQuery.refetch()}
-      />
-
-      <AIAutoTimetableModal
-        visible={showAIModal}
-        onClose={() => setShowAIModal(false)}
-        courseId={selectedCourseId}
-        userId={user?.id ?? null}
-        onSuccess={() => { plansQuery.refetch(); sessionsQuery.refetch(); }}
+        planDefaultOf={planDefaultFor}
       />
 
       <ScheduleTestModal
@@ -673,7 +621,7 @@ export default function StudyTimetableScreen() {
 // ─── Day Detail Modal ─────────────────────────────────────────────────────────
 
 function DayDetailModal({
-  visible, onClose, day, month, year, sessions, tests, onSessionUpdate,
+  visible, onClose, day, month, year, sessions, tests, onSessionUpdate, planDefaultOf,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -683,6 +631,7 @@ function DayDetailModal({
   sessions: StudyTimetableSession[];
   tests: SelfTest[];
   onSessionUpdate: () => void;
+  planDefaultOf: (s: StudyTimetableSession) => ReminderChoice | null;
 }) {
   const navigation = useNavigation<NavProp>();
   const [loading, setLoading] = useState(false);
@@ -690,7 +639,8 @@ function DayDetailModal({
   const [editTitle, setEditTitle] = useState('');
   const [editDuration, setEditDuration] = useState('');
   const [editNotes, setEditNotes] = useState('');
-  const [editChannel, setEditChannel] = useState<ReminderChannel | null>(null);
+  const [editChannel, setEditChannel] = useState<ReminderChoice | null>(null);
+  const [channelSession, setChannelSession] = useState<StudyTimetableSession | null>(null);
 
   function openEdit(s: StudyTimetableSession) {
     setEditingSession(s);
@@ -738,6 +688,7 @@ function DayDetailModal({
   const dateLabel = day ? `${day} ${MONTH_NAMES[month].slice(0, 3)} ${year}` : '';
 
   return (
+    <>
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.sheetOverlay}>
         <TouchableOpacity style={styles.sheetDismiss} onPress={onClose} activeOpacity={1} />
@@ -805,13 +756,15 @@ function DayDetailModal({
                           return (
                             <TouchableOpacity
                               style={[styles.channelChip, { backgroundColor: ch.bg }]}
-                              onPress={() => openEdit(s)}
+                              onPress={() => setChannelSession(s)}
                               disabled={loading}
+                              hitSlop={{ top: 6, bottom: 6 }}
                               accessibilityRole="button"
                               accessibilityLabel={`Reminder: ${ch.label}. Change`}
                             >
                               <Ionicons name={ch.icon as keyof typeof Ionicons.glyphMap} size={12} color={ch.fg} />
                               <Text style={[styles.channelChipText, { color: ch.fg }]}>{ch.label}</Text>
+                              <Ionicons name="chevron-down" size={12} color={ch.fg} />
                             </TouchableOpacity>
                           );
                         })()}
@@ -889,76 +842,15 @@ function DayDetailModal({
         </View>
       </View>
     </Modal>
+    <SessionChannelSheet
+      visible={channelSession !== null}
+      session={channelSession}
+      planDefault={channelSession ? planDefaultOf(channelSession) : null}
+      onClose={() => setChannelSession(null)}
+      onSaved={() => { setChannelSession(null); onSessionUpdate(); }}
+    />
+    </>
   );
-}
-
-// ─── AI Auto Timetable Modal ──────────────────────────────────────────────────
-
-// ─── AI Plan Wizard: types, constants & helpers ──────────────────────────────
-
-type ScopeType = 'course' | 'subject' | 'chapter' | 'topic';
-
-interface PlanItem {
-  id: string;
-  title: string;
-  durationMinutes: number;
-  subject_id: string;
-  chapter_id: string;
-  topic_id: string;
-}
-
-interface IntervalState { enabled: boolean; start: string; end: string }
-interface DayIntervals { morning: IntervalState; afternoon: IntervalState; night: IntervalState }
-
-const WEEKDAY_DEFAULT: DayIntervals = {
-  morning:   { enabled: true,  start: '07:00', end: '09:00' },
-  afternoon: { enabled: false, start: '14:00', end: '16:00' },
-  night:     { enabled: true,  start: '19:00', end: '21:00' },
-};
-const WEEKEND_DEFAULT: DayIntervals = {
-  morning:   { enabled: true,  start: '09:00', end: '11:00' },
-  afternoon: { enabled: true,  start: '15:00', end: '17:00' },
-  night:     { enabled: false, start: '20:00', end: '22:00' },
-};
-
-const INTERVAL_KEYS: (keyof DayIntervals)[] = ['morning', 'afternoon', 'night'];
-const INTERVAL_META: Record<keyof DayIntervals, { title: string; emoji: string }> = {
-  morning:   { title: 'Morning',   emoji: '🌅' },
-  afternoon: { title: 'Afternoon', emoji: '☀️' },
-  night:     { title: 'Night',     emoji: '🌙' },
-};
-
-const WIZARD_STEPS = ['Scope', 'Dates', 'Weekdays', 'Weekend', 'Check', 'Review'];
-
-function cloneDay(d: DayIntervals): DayIntervals {
-  return { morning: { ...d.morning }, afternoon: { ...d.afternoon }, night: { ...d.night } };
-}
-
-/** Convert the named-window editor state to the edge-function day plan shape. */
-function toDayPlan(d: DayIntervals): { intervals: { label: string; start: string; end: string }[] } {
-  return {
-    intervals: INTERVAL_KEYS
-      .filter(k => d[k].enabled && d[k].start < d[k].end)
-      .map(k => ({ label: k as string, start: d[k].start, end: d[k].end })),
-  };
-}
-
-function minutesBetween(start: string, end: string): number {
-  const [sh, sm] = start.split(':').map(Number);
-  const [eh, em] = end.split(':').map(Number);
-  return Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
-}
-
-function dayMinutes(d: DayIntervals): number {
-  return INTERVAL_KEYS.reduce(
-    (sum, k) => sum + (d[k].enabled && d[k].start < d[k].end ? minutesBetween(d[k].start, d[k].end) : 0),
-    0,
-  );
-}
-
-/** Local-time YYYY-MM-DD (deadline must be local, not UTC). */
-function formatLocalYMD(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /** Grace window so a test scheduled for "now" still passes between tapping and saving. */
@@ -976,714 +868,6 @@ function formatReadableDateTime(d: Date): string {
   const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   return `${date} · ${time}`;
 }
-
-function addDays(d: Date, n: number): Date {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
-}
-
-function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-
-function fmtHm(totalMin: number): string {
-  const h = Math.floor(totalMin / 60);
-  const m = Math.round(totalMin % 60);
-  if (h > 0 && m > 0) return `${h} h ${m}m`;
-  if (h > 0) return `${h} h`;
-  return `${m}m`;
-}
-
-// ─── useTopicsForChapter ──────────────────────────────────────────────────────
-
-function useTopicsForChapter(chapterId: string | null) {
-  const [topics, setTopics] = useState<SelectOption[]>([]);
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!chapterId) { setTopics([]); return; }
-    let cancelled = false;
-    setLoading(true);
-    supabase.getChapterTopics([chapterId])
-      .then(res => {
-        if (!cancelled && res.success && res.topics) {
-          setTopics(res.topics.map((t: any) => ({ id: t.id, name: t.title })));
-        }
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [chapterId]);
-  return { topics, loading };
-}
-
-// ─── useScopeContent ──────────────────────────────────────────────────────────
-// Resolves the topics inside the chosen scope and builds the items[] payload the
-// edge function iterates over to create sessions. Only topics that have at least
-// one published AI lecture are included — real per-topic durations and lecture
-// counts come from the get_published_lecture_stats RPC. A scope with no published
-// lectures yields an empty items[] (and a clear empty state), never a blank plan.
-
-function useScopeContent(
-  courseId: string | null,
-  scopeType: ScopeType,
-  subjectId: string | null,
-  chapterId: string | null,
-  topicId: string | null,
-) {
-  const [items, setItems] = useState<PlanItem[]>([]);
-  const [lectureCount, setLectureCount] = useState(0);
-  const [fromLectures, setFromLectures] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    function clear() { if (!cancelled) { setItems([]); setLectureCount(0); setFromLectures(false); } }
-
-    async function run() {
-      if (!courseId) { clear(); return; }
-      if (scopeType === 'subject' && !subjectId) { clear(); return; }
-      if (scopeType === 'chapter' && !chapterId) { clear(); return; }
-      if (scopeType === 'topic' && !topicId) { clear(); return; }
-
-      setLoading(true);
-      try {
-        const token = await supabase.getAccessToken();
-        const headers = {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${token ?? SUPABASE_ANON_KEY}`,
-        };
-
-        // 1. Subjects in scope
-        let subjectIds: string[] = [];
-        if (scopeType === 'course') {
-          const res = await supabase.getCourseSubjects(courseId);
-          subjectIds = res.success && res.subjects ? res.subjects.map(s => s.subject.id) : [];
-        } else if (subjectId) {
-          subjectIds = [subjectId];
-        }
-        if (subjectIds.length === 0) { clear(); return; }
-
-        // 2. Chapters (keep subject_id so items carry it)
-        const chapRes = await fetch(
-          `${SUPABASE_URL}/rest/v1/subject_chapters?select=id,subject_id&subject_id=in.(${subjectIds.join(',')})`,
-          { headers },
-        );
-        const chapData = await chapRes.json();
-        let chapterRows: { id: string; subject_id: string }[] =
-          Array.isArray(chapData) ? chapData.map((c: any) => ({ id: c.id, subject_id: c.subject_id })) : [];
-        if (scopeType === 'chapter' || scopeType === 'topic') {
-          chapterRows = chapterRows.filter(c => c.id === chapterId);
-        }
-        if (chapterRows.length === 0) { clear(); return; }
-        const chapterSubject: Record<string, string> = {};
-        chapterRows.forEach(c => { chapterSubject[c.id] = c.subject_id; });
-
-        // 3. Topics in those chapters
-        const topicsRes = await supabase.getChapterTopics(chapterRows.map(c => c.id));
-        let topics: any[] = topicsRes.success && topicsRes.topics ? topicsRes.topics : [];
-        if (scopeType === 'topic') topics = topics.filter(t => t.id === topicId);
-        if (topics.length === 0) { clear(); return; }
-
-        // 4. Real published-lecture durations per topic via RPC.
-        //    get_published_lecture_stats is keyed by subject only, so fan out
-        //    one call per subject and merge. Topics absent from the result have
-        //    no student-watchable published lecture and are excluded entirely.
-        const rpcResults = await Promise.all(
-          subjectIds.map(async (sid) => {
-            const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_published_lecture_stats`, {
-              method: 'POST',
-              headers: { ...headers, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ p_subject_id: sid }),
-            });
-            const d = await r.json();
-            return Array.isArray(d) ? d : [];
-          }),
-        );
-        const durationByTopic: Record<string, number> = {};
-        const lectureCountByTopic: Record<string, number> = {};
-        rpcResults.flat().forEach((row: any) => {
-          const tid = row?.topic_id;
-          if (!tid) return;
-          durationByTopic[tid] = (durationByTopic[tid] ?? 0) + (Number(row.total_duration_minutes) || 0);
-          lectureCountByTopic[tid] = (lectureCountByTopic[tid] ?? 0) + (Number(row.lecture_count) || 0);
-        });
-
-        // 5. Build items from in-scope topics that have ≥1 published lecture,
-        //    using the real per-topic duration from the RPC.
-        const built: PlanItem[] = topics
-          .filter(t => (durationByTopic[t.id] ?? 0) > 0)
-          .map(t => ({
-            id: `topic-${t.id}`,
-            title: t.title,
-            durationMinutes: durationByTopic[t.id],
-            subject_id: chapterSubject[t.chapter_id] ?? subjectIds[0],
-            chapter_id: t.chapter_id,
-            topic_id: t.id,
-          }));
-        const totalLectures = built.reduce((s, it) => s + (lectureCountByTopic[it.topic_id] ?? 1), 0);
-
-        if (!cancelled) {
-          setItems(built);
-          setLectureCount(totalLectures);
-          setFromLectures(built.length > 0);
-        }
-      } catch {
-        clear();
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    run();
-    return () => { cancelled = true; };
-  }, [courseId, scopeType, subjectId, chapterId, topicId]);
-
-  const totalMinutes = items.reduce((s, it) => s + it.durationMinutes, 0);
-  return { items, totalMinutes, lectureCount, fromLectures, loading };
-}
-
-// ─── DeadlinePicker (in-modal calendar, no extra dependency) ──────────────────
-
-function DeadlinePicker({ value, min, onChange }: {
-  value: Date;
-  min: Date;
-  onChange: (d: Date) => void;
-}) {
-  const [vYear, setVYear] = useState(value.getFullYear());
-  const [vMonth, setVMonth] = useState(value.getMonth());
-  const grid = buildCalendarGrid(vYear, vMonth);
-  const minKey = formatLocalYMD(startOfDay(min));
-  const valueKey = formatLocalYMD(value);
-
-  function prev() { if (vMonth === 0) { setVYear(y => y - 1); setVMonth(11); } else setVMonth(m => m - 1); }
-  function next() { if (vMonth === 11) { setVYear(y => y + 1); setVMonth(0); } else setVMonth(m => m + 1); }
-
-  return (
-    <View style={styles.dpCard}>
-      <View style={styles.dpHeader}>
-        <TouchableOpacity onPress={prev} style={styles.dpNavBtn}>
-          <Ionicons name="chevron-back" size={18} color={colors.text} />
-        </TouchableOpacity>
-        <Text style={styles.dpMonthTitle}>{MONTH_NAMES[vMonth]} {vYear}</Text>
-        <TouchableOpacity onPress={next} style={styles.dpNavBtn}>
-          <Ionicons name="chevron-forward" size={18} color={colors.text} />
-        </TouchableOpacity>
-      </View>
-      <View style={styles.dpWeekRow}>
-        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => (
-          <Text key={i} style={styles.dpWeekLabel}>{d}</Text>
-        ))}
-      </View>
-      <View style={styles.dpGrid}>
-        {grid.map((day, idx) => {
-          if (day === null) return <View key={idx} style={styles.dpCell} />;
-          const key = datePrefixForDay(vYear, vMonth, day);
-          const disabled = key < minKey;
-          const selected = key === valueKey;
-          return (
-            <TouchableOpacity
-              key={idx}
-              style={[styles.dpCell, selected && styles.dpCellSelected, disabled && styles.dpCellDisabled]}
-              disabled={disabled}
-              onPress={() => onChange(new Date(vYear, vMonth, day))}
-            >
-              <Text style={[
-                styles.dpCellText,
-                selected && styles.dpCellTextSelected,
-                disabled && styles.dpCellTextDisabled,
-              ]}>{day}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-    </View>
-  );
-}
-
-// ─── IntervalEditor (named morning/afternoon/night windows) ───────────────────
-
-function IntervalEditor({ value, onChange }: {
-  value: DayIntervals;
-  onChange: (d: DayIntervals) => void;
-}) {
-  function update(key: keyof DayIntervals, patch: Partial<IntervalState>) {
-    onChange({ ...value, [key]: { ...value[key], ...patch } });
-  }
-  return (
-    <View style={{ gap: 10 }}>
-      {INTERVAL_KEYS.map(key => {
-        const iv = value[key];
-        const meta = INTERVAL_META[key];
-        return (
-          <View key={key} style={[styles.windowCard, !iv.enabled && styles.windowCardDisabled]}>
-            <View style={styles.windowHeader}>
-              <Text style={styles.windowTitle}>{meta.emoji}  {meta.title}</Text>
-              <TouchableOpacity style={styles.skipToggle} onPress={() => update(key, { enabled: !iv.enabled })}>
-                <View style={[styles.skipCheckbox, !iv.enabled && styles.skipCheckboxOn]}>
-                  {!iv.enabled && <Ionicons name="checkmark" size={12} color={colors.white} />}
-                </View>
-                <Text style={styles.skipLabel}>Skip</Text>
-              </TouchableOpacity>
-            </View>
-            {iv.enabled && (
-              <View style={styles.windowTimeRow}>
-                <TextInput
-                  style={[styles.input, styles.timeInput]}
-                  value={iv.start}
-                  onChangeText={v => update(key, { start: v })}
-                  placeholder="HH:MM"
-                  placeholderTextColor={colors.textMuted}
-                />
-                <Text style={styles.intervalDash}>–</Text>
-                <TextInput
-                  style={[styles.input, styles.timeInput]}
-                  value={iv.end}
-                  onChangeText={v => update(key, { end: v })}
-                  placeholder="HH:MM"
-                  placeholderTextColor={colors.textMuted}
-                />
-              </View>
-            )}
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-// ─── AI Auto Timetable Modal ──────────────────────────────────────────────────
-
-function AIAutoTimetableModal({
-  visible, onClose, courseId, userId, onSuccess,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  courseId: string | null;
-  userId: string | null;
-  onSuccess: () => void;
-}) {
-  const { subjects, loading: loadingSubjects } = useSubjectsForCourse(courseId);
-  const [subjectId, setSubjectId] = useState<string | null>(null);
-  const { chapters, loading: loadingChapters } = useChaptersForSubject(subjectId);
-  const [chapterId, setChapterId] = useState<string | null>(null);
-  const { topics, loading: loadingTopics } = useTopicsForChapter(chapterId);
-  const [topicId, setTopicId] = useState<string | null>(null);
-
-  const [step, setStep] = useState(0);
-  const [scope, setScope] = useState<ScopeType>('course');
-  const [startDate, setStartDate] = useState<Date>(() => startOfDay(new Date()));
-  const [deadline, setDeadline] = useState<Date>(() => startOfDay(addDays(new Date(), 30)));
-  const [weekday, setWeekday] = useState<DayIntervals>(() => cloneDay(WEEKDAY_DEFAULT));
-  const [saturday, setSaturday] = useState<DayIntervals>(() => cloneDay(WEEKEND_DEFAULT));
-  const [sunday, setSunday] = useState<DayIntervals>(() => cloneDay(WEEKEND_DEFAULT));
-  const [pattern, setPattern] = useState<'sequential' | 'pair' | 'mixed'>('sequential');
-  const [feedbackMessage, setFeedbackMessage] = useState('');
-  const [feasibility, setFeasibility] = useState<{ verdict?: string; message?: string } | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState('');
-
-  const { items, totalMinutes, lectureCount, fromLectures, loading: loadingContent } =
-    useScopeContent(courseId, scope, subjectId, chapterId, topicId);
-
-  const todayStart = startOfDay(new Date());
-
-  function reset() {
-    setStep(0); setScope('course');
-    setSubjectId(null); setChapterId(null); setTopicId(null);
-    setStartDate(startOfDay(new Date()));
-    setDeadline(startOfDay(addDays(new Date(), 30)));
-    setWeekday(cloneDay(WEEKDAY_DEFAULT));
-    setSaturday(cloneDay(WEEKEND_DEFAULT));
-    setSunday(cloneDay(WEEKEND_DEFAULT));
-    setPattern('sequential'); setFeedbackMessage('');
-    setFeasibility(null); setChecking(false); setGenerating(false);
-    setDone(false); setError('');
-  }
-
-  function closeAndReset() { onClose(); reset(); }
-
-  // Derived labels & payload pieces
-  const subjectName = subjects.find(s => s.id === subjectId)?.name ?? '';
-  const chapterName = chapters.find(c => c.id === chapterId)?.name ?? '';
-  const topicName = topics.find(t => t.id === topicId)?.name ?? '';
-
-  let scopeLabel = 'Entire course';
-  if (scope === 'subject') scopeLabel = subjectName || 'Subject';
-  else if (scope === 'chapter') scopeLabel = chapterName || 'Chapter';
-  else if (scope === 'topic') scopeLabel = topicName ? `${chapterName} • ${topicName}` : 'Topic';
-
-  const scopeId = scope === 'course' ? null
-    : scope === 'subject' ? subjectId
-    : scope === 'chapter' ? chapterId
-    : topicId;
-
-  const weeklyMinutes = dayMinutes(weekday) * 5 + dayMinutes(saturday) + dayMinutes(sunday);
-  const dailyHours = Math.round((weeklyMinutes / 7) / 60) || 1;
-
-  function scopeValid() {
-    if (scope === 'course') return true;
-    if (scope === 'subject') return !!subjectId;
-    if (scope === 'chapter') return !!chapterId;
-    return !!topicId;
-  }
-  const weekdayValid = toDayPlan(weekday).intervals.length > 0;
-  // Deadline must be at least one day after the start date.
-  const deadlineMin = startOfDay(addDays(startDate, 1));
-  const deadlineValid = startOfDay(deadline).getTime() >= deadlineMin.getTime();
-  const spanDays = Math.max(
-    0,
-    Math.round((startOfDay(deadline).getTime() - startOfDay(startDate).getTime()) / 86400000),
-  );
-
-  // Picking a start date keeps the deadline at least a day ahead.
-  function handleStartDate(d: Date) {
-    const sd = startOfDay(d);
-    setStartDate(sd);
-    if (startOfDay(deadline).getTime() <= sd.getTime()) {
-      setDeadline(startOfDay(addDays(sd, 30)));
-    }
-  }
-
-  function canNext(): boolean {
-    switch (step) {
-      case 0: return scopeValid() && !loadingContent && items.length > 0;
-      case 1: return deadlineValid;
-      case 2: return weekdayValid;
-      case 3: return true;
-      case 4: return !checking && !!feasibility && feasibility.verdict !== 'too_short';
-      case 5: return !generating;
-      default: return true;
-    }
-  }
-
-  async function runFeasibility() {
-    setChecking(true); setError(''); setFeasibility(null);
-    try {
-      const data = await edgePost('study-timetable-ai', {
-        action: 'evaluate_feasibility',
-        scopeLabel,
-        contentDurationMinutes: totalMinutes,
-        startDate: formatLocalYMD(startDate),
-        deadline: formatLocalYMD(deadline),
-        dailyHours,
-      });
-      setFeasibility(data);
-    } catch (e: any) {
-      setError(e.message ?? 'Feasibility check failed');
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  async function generate() {
-    // Student identity is derived from the JWT by the edge function, so only a
-    // course is required here.
-    if (!courseId) return;
-    setGenerating(true); setError('');
-    try {
-      await edgePost('study-timetable-ai', {
-        action: 'generate_plan',
-        courseId,
-        scopeLabel,
-        scopeType: scope,
-        scopeId,
-        startDate: formatLocalYMD(startDate),
-        deadline: formatLocalYMD(deadline),
-        tzOffsetMinutes: new Date().getTimezoneOffset(),
-        weekday: toDayPlan(weekday),
-        saturday: toDayPlan(saturday),
-        sunday: toDayPlan(sunday),
-        items,
-        feedbackMessage: feedbackMessage.trim() || undefined,
-        pattern,
-      });
-      setDone(true);
-      onSuccess();
-    } catch (e: any) {
-      setError(e.message ?? 'Generation failed');
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  // Auto-run feasibility when arriving on the Check step
-  useEffect(() => {
-    if (visible && step === 4) runFeasibility();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, visible]);
-
-  function handleNext() {
-    if (!canNext()) return;
-    if (step < 5) setStep(step + 1);
-    else generate();
-  }
-  function handleBack() { if (step > 0) setStep(step - 1); }
-
-  const verdict = feasibility?.verdict;
-  const verdictColor = verdict === 'too_short' ? colors.error : verdict === 'generous' ? '#2563EB' : colors.success;
-  const verdictBg = verdict === 'too_short' ? '#FEF2F2' : verdict === 'generous' ? '#EFF6FF' : '#ECFDF5';
-  const verdictTitle = verdict === 'too_short' ? '✗ Too tight' : verdict === 'generous' ? '✓ Plenty of time' : '✓ Looks good';
-
-  const contentSummary = loadingContent
-    ? 'Checking available content…'
-    : items.length === 0
-      ? 'No published lectures for this scope yet'
-      : `${fmtHm(totalMinutes)} across ${lectureCount} published lecture${lectureCount === 1 ? '' : 's'}`;
-
-  return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={closeAndReset}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalCard}>
-          <View style={styles.modalHeader}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Ionicons name="sparkles" size={18} color={colors.primary} />
-              <Text style={styles.modalTitle}>Start AI Plan</Text>
-            </View>
-            <TouchableOpacity onPress={closeAndReset}>
-              <Ionicons name="close" size={22} color={colors.textSecondary} />
-            </TouchableOpacity>
-          </View>
-
-          {!done && (
-            <View style={styles.wizProgressWrap}>
-              <View style={styles.wizProgressTrack}>
-                <View style={[styles.wizProgressFill, { width: `${((step + 1) / WIZARD_STEPS.length) * 100}%` }]} />
-              </View>
-              <Text style={styles.wizStepLabel}>
-                Step {step + 1} of {WIZARD_STEPS.length} · {WIZARD_STEPS[step]}
-              </Text>
-            </View>
-          )}
-
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-            {done ? (
-              <View style={styles.doneBox}>
-                <Ionicons name="checkmark-circle" size={56} color={colors.success} />
-                <Text style={styles.doneTitle}>Plan Generated!</Text>
-                <Text style={styles.doneSubtitle}>Your study plan is ready. Check the calendar below.</Text>
-                <TouchableOpacity style={[styles.wizardNextBtn, { alignSelf: 'stretch' }]} onPress={closeAndReset}>
-                  <Text style={styles.wizardNextBtnText}>Done</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <>
-                {/* STEP 0 — Scope */}
-                {step === 0 && (
-                  <>
-                    <Text style={styles.wizardLabel}>What do you want to plan?</Text>
-                    {([
-                      ['course', 'Entire Course'],
-                      ['subject', 'Specific Subject'],
-                      ['chapter', 'Specific Chapter'],
-                      ['topic', 'Specific Topic'],
-                    ] as [ScopeType, string][]).map(([s, label]) => (
-                      <TouchableOpacity
-                        key={s}
-                        style={[styles.scopeOption, scope === s && styles.scopeOptionActive]}
-                        onPress={() => setScope(s)}
-                      >
-                        <View style={[styles.scopeRadio, scope === s && styles.scopeRadioActive]} />
-                        <Text style={styles.scopeOptionText}>{label}</Text>
-                      </TouchableOpacity>
-                    ))}
-
-                    {(scope === 'subject' || scope === 'chapter' || scope === 'topic') && (
-                      <SimpleSelect
-                        label="Subject"
-                        options={subjects}
-                        value={subjectId}
-                        onChange={id => { setSubjectId(id); setChapterId(null); setTopicId(null); }}
-                        placeholder="Pick a subject…"
-                        loading={loadingSubjects}
-                      />
-                    )}
-                    {(scope === 'chapter' || scope === 'topic') && subjectId && (
-                      <SimpleSelect
-                        label="Chapter"
-                        options={chapters}
-                        value={chapterId}
-                        onChange={id => { setChapterId(id); setTopicId(null); }}
-                        placeholder="Pick a chapter…"
-                        loading={loadingChapters}
-                      />
-                    )}
-                    {scope === 'topic' && chapterId && (
-                      <SimpleSelect
-                        label="Topic"
-                        options={topics}
-                        value={topicId}
-                        onChange={setTopicId}
-                        placeholder="Pick a topic…"
-                        loading={loadingTopics}
-                      />
-                    )}
-
-                    {scopeValid() && (
-                      <View style={styles.contentSummary}>
-                        {loadingContent
-                          ? <ActivityIndicator size="small" color={colors.primary} />
-                          : <Ionicons
-                              name={items.length > 0 ? 'film-outline' : 'alert-circle-outline'}
-                              size={16}
-                              color={items.length > 0 ? colors.primary : colors.error}
-                            />}
-                        <Text style={styles.contentSummaryText}>{contentSummary}</Text>
-                      </View>
-                    )}
-                  </>
-                )}
-
-                {/* STEP 1 — Dates */}
-                {step === 1 && (
-                  <>
-                    <Text style={styles.wizardLabel}>Start on</Text>
-                    <DeadlinePicker value={startDate} min={todayStart} onChange={handleStartDate} />
-                    <Text style={styles.dpSelectedLabel}>
-                      Start: {startDate.getDate()} {MONTH_NAMES[startDate.getMonth()].slice(0, 3)} {startDate.getFullYear()}
-                    </Text>
-
-                    <Text style={[styles.wizardLabel, { marginTop: spacing.lg }]}>Finish by</Text>
-                    <DeadlinePicker value={deadline} min={deadlineMin} onChange={setDeadline} />
-                    <Text style={styles.dpSelectedLabel}>
-                      Deadline: {deadline.getDate()} {MONTH_NAMES[deadline.getMonth()].slice(0, 3)} {deadline.getFullYear()} ({spanDays} day{spanDays === 1 ? '' : 's'})
-                    </Text>
-                  </>
-                )}
-
-                {/* STEP 2 — Weekdays */}
-                {step === 2 && (
-                  <>
-                    <Text style={styles.wizardLabel}>Weekday study windows (Mon–Fri)</Text>
-                    <IntervalEditor value={weekday} onChange={setWeekday} />
-                    <Text style={styles.dpSelectedLabel}>{fmtHm(dayMinutes(weekday))} per weekday</Text>
-                    {!weekdayValid && (
-                      <Text style={styles.errorText}>Enable at least one window with a valid time range.</Text>
-                    )}
-                  </>
-                )}
-
-                {/* STEP 3 — Weekend */}
-                {step === 3 && (
-                  <>
-                    <Text style={styles.wizardLabel}>Saturday windows</Text>
-                    <IntervalEditor value={saturday} onChange={setSaturday} />
-                    <Text style={styles.dpSelectedLabel}>{fmtHm(dayMinutes(saturday))} on Saturday</Text>
-                    <Text style={[styles.wizardLabel, { marginTop: spacing.lg }]}>Sunday windows</Text>
-                    <IntervalEditor value={sunday} onChange={setSunday} />
-                    <Text style={styles.dpSelectedLabel}>{fmtHm(dayMinutes(sunday))} on Sunday</Text>
-                  </>
-                )}
-
-                {/* STEP 4 — Check */}
-                {step === 4 && (
-                  <>
-                    <Text style={styles.wizardLabel}>Feasibility check</Text>
-                    <View style={styles.recapCard}>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Scope</Text><Text style={styles.recapVal}>{scopeLabel}</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Content</Text><Text style={styles.recapVal}>{fmtHm(totalMinutes)}</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Start</Text><Text style={styles.recapVal}>{formatLocalYMD(startDate)}</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Deadline</Text><Text style={styles.recapVal}>{formatLocalYMD(deadline)}</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Daily study</Text><Text style={styles.recapVal}>~{dailyHours} h/day</Text></View>
-                    </View>
-
-                    {checking ? (
-                      <View style={styles.contentSummary}>
-                        <ActivityIndicator size="small" color={colors.primary} />
-                        <Text style={styles.contentSummaryText}>Checking feasibility…</Text>
-                      </View>
-                    ) : feasibility ? (
-                      <View style={[styles.feasibilityBox, { backgroundColor: verdictBg, borderColor: verdictColor }]}>
-                        <Text style={[styles.feasibilityVerdict, { color: verdictColor }]}>{verdictTitle}</Text>
-                        {feasibility.message ? <Text style={styles.feasibilityMessage}>{feasibility.message}</Text> : null}
-                      </View>
-                    ) : null}
-
-                    <TouchableOpacity style={styles.wizardBackBtn} onPress={runFeasibility} disabled={checking}>
-                      <Text style={styles.wizardBackBtnText}>↻ Re-check</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-
-                {/* STEP 5 — Review */}
-                {step === 5 && (
-                  <>
-                    <Text style={styles.wizardLabel}>Review & generate</Text>
-                    <View style={styles.recapCard}>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Scope</Text><Text style={styles.recapVal}>{scopeLabel}</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Content</Text><Text style={styles.recapVal}>{contentSummary}</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Start</Text><Text style={styles.recapVal}>{formatLocalYMD(startDate)}</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Deadline</Text><Text style={styles.recapVal}>{formatLocalYMD(deadline)}</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Weekday</Text><Text style={styles.recapVal}>{fmtHm(dayMinutes(weekday))}/day</Text></View>
-                      <View style={styles.recapRow}><Text style={styles.recapKey}>Weekend</Text><Text style={styles.recapVal}>Sat {fmtHm(dayMinutes(saturday))} · Sun {fmtHm(dayMinutes(sunday))}</Text></View>
-                    </View>
-
-                    <Text style={styles.wizardLabel}>Ordering</Text>
-                    <View style={styles.typeRow}>
-                      {([
-                        ['sequential', 'Sequential'],
-                        ['pair', 'Pair'],
-                        ['mixed', 'Mixed'],
-                      ] as ['sequential' | 'pair' | 'mixed', string][]).map(([p, label]) => (
-                        <TouchableOpacity
-                          key={p}
-                          style={[styles.patternOption, pattern === p && styles.patternOptionActive]}
-                          onPress={() => setPattern(p)}
-                        >
-                          <Text style={[styles.patternOptionText, pattern === p && styles.patternOptionTextActive]}>{label}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-
-                    <Text style={styles.wizardLabel}>Preferences (optional)</Text>
-                    <TextInput
-                      style={[styles.input, { minHeight: 64, textAlignVertical: 'top' }]}
-                      placeholder="e.g. Lighter load on Fridays, focus on weak chapters…"
-                      value={feedbackMessage}
-                      onChangeText={setFeedbackMessage}
-                      placeholderTextColor={colors.textMuted}
-                      multiline
-                    />
-                  </>
-                )}
-
-                {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-                {/* Footer nav */}
-                <View style={styles.wizFooter}>
-                  {step > 0 ? (
-                    <TouchableOpacity style={styles.wizFooterBack} onPress={handleBack} disabled={generating}>
-                      <Text style={styles.wizardBackBtnText}>← Back</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity style={styles.wizFooterBack} onPress={closeAndReset}>
-                      <Text style={styles.wizardBackBtnText}>Cancel</Text>
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity
-                    style={[styles.wizFooterNext, !canNext() && styles.wizardNextBtnDisabled]}
-                    onPress={handleNext}
-                    disabled={!canNext()}
-                  >
-                    {generating
-                      ? <ActivityIndicator size="small" color={colors.white} />
-                      : <Text style={styles.wizardNextBtnText}>{step === 5 ? 'Generate Plan' : 'Next →'}</Text>}
-                  </TouchableOpacity>
-                </View>
-              </>
-            )}
-            <View style={{ height: 32 }} />
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 // ─── Schedule Test Modal ──────────────────────────────────────────────────────
 
 function ScheduleTestModal({
@@ -1991,7 +1175,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 4, gap: spacing.sm,
   },
-  backBtn: { padding: 4 },
   headerTitle: { flex: 1, fontSize: fontSize.xl, fontFamily: fontFamily.heading, color: colors.white },
 
   body: { flex: 1 },
@@ -2023,6 +1206,8 @@ const styles = StyleSheet.create({
   planCardAmber: { backgroundColor: '#78350F' },
   planCardSelected: { borderWidth: 2.5, borderColor: '#C4B5FD' },
   planCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  planCardActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  reminderRowWrap: { paddingHorizontal: spacing.md, marginBottom: spacing.sm },
   modeBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: borderRadius.full },
   modeBadgeAI: { backgroundColor: '#7C3AED' },
   modeBadgeManual: { backgroundColor: '#5B21B6' },
@@ -2201,9 +1386,9 @@ const styles = StyleSheet.create({
   editChannelLabel: { fontSize: fontSize.sm, fontFamily: fontFamily.semiBold, color: colors.text, marginTop: 4 },
   channelChip: {
     alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4,
-    height: 24, paddingHorizontal: 8, borderRadius: 12, marginTop: 2,
+    height: 32, paddingHorizontal: 12, borderRadius: 16, marginTop: 4,
   },
-  channelChipText: { fontSize: fontSize.xs, fontFamily: fontFamily.medium },
+  channelChipText: { fontSize: fontSize.sm, fontFamily: fontFamily.medium },
   editSaveBtn: {
     backgroundColor: colors.primary, borderRadius: borderRadius.sm, padding: 10, alignItems: 'center',
   },
@@ -2263,51 +1448,12 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold, color: colors.text },
 
   // Wizard
-  wizardLabel: {
-    fontSize: fontSize.sm, fontFamily: fontFamily.semiBold, color: colors.textSecondary,
-    marginTop: spacing.md, marginBottom: 6,
-  },
-  scopeOption: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.sm,
-    borderRadius: borderRadius.md, borderWidth: 1, borderColor: colors.border, marginBottom: 8,
-    backgroundColor: colors.white,
-  },
-  scopeOptionActive: { borderColor: colors.primary, backgroundColor: '#F0FDF4' },
-  scopeRadio: { width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: colors.border },
-  scopeRadioActive: { borderColor: colors.primary, backgroundColor: colors.primary },
-  scopeOptionText: { fontSize: fontSize.md, color: colors.text, fontFamily: fontFamily.regular },
   wizardNextBtn: {
     backgroundColor: colors.primary, borderRadius: borderRadius.md,
     padding: spacing.md, alignItems: 'center', marginTop: spacing.md,
   },
   wizardNextBtnDisabled: { opacity: 0.6 },
   wizardNextBtnText: { fontSize: fontSize.md, color: colors.white, fontFamily: fontFamily.semiBold },
-  wizardBackBtn: { padding: spacing.sm, alignItems: 'center', marginTop: 4 },
-  wizardBackBtnText: { fontSize: fontSize.sm, color: colors.textSecondary },
-
-  // Intervals
-  intervalsBlock: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md,
-    padding: spacing.sm, marginBottom: 10,
-  },
-  intervalHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
-  intervalDayLabel: { flex: 1, fontSize: fontSize.sm, fontFamily: fontFamily.semiBold, color: colors.text },
-  intervalHoursLabel: { fontSize: fontSize.xs, color: colors.primary, fontFamily: fontFamily.medium },
-  intervalRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  intervalDash: { fontSize: fontSize.md, color: colors.textMuted },
-  timeInput: { flex: 1, marginBottom: 0, textAlign: 'center' },
-
-  // Feasibility
-  feasibilityBox: { borderRadius: borderRadius.md, borderWidth: 1.5, padding: spacing.md, gap: 6 },
-  feasibilityVerdict: { fontSize: fontSize.lg, fontFamily: fontFamily.semiBold },
-  feasibilityMessage: { fontSize: fontSize.sm, color: colors.text, fontFamily: fontFamily.regular },
-
-  // Done
-  doneBox: { alignItems: 'center', paddingVertical: spacing.xl, gap: spacing.md },
-  doneTitle: { fontSize: fontSize.xxl, fontFamily: fontFamily.heading, color: colors.text },
-  doneSubtitle: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center', fontFamily: fontFamily.regular },
-
-  // Form inputs
   input: {
     borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md,
     padding: spacing.sm, fontSize: fontSize.md, color: colors.text,
@@ -2322,10 +1468,6 @@ const styles = StyleSheet.create({
   dateTimeText: { flex: 1, fontSize: fontSize.md, color: colors.text },
   dateTimePlaceholder: { color: colors.textMuted },
   scopeEmptyHint: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: 8, marginTop: 2 },
-  twoCol: { flexDirection: 'row', alignItems: 'flex-start' },
-  typeRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: 8 },
-
-  // Segmented control (Type tabs)
   segmentTrack: {
     flexDirection: 'row', backgroundColor: '#FEF3C7', borderRadius: borderRadius.full,
     padding: 4, marginBottom: 10, gap: 4,
@@ -2374,110 +1516,7 @@ const styles = StyleSheet.create({
   multiSelectTextActive: { color: '#B45309', fontFamily: fontFamily.semiBold },
 
   // SimpleSelect
-  selectBox: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md,
-    padding: spacing.sm, backgroundColor: colors.white, marginBottom: 8,
-  },
-  selectValue: { flex: 1, fontSize: fontSize.md, color: colors.text, fontFamily: fontFamily.regular },
-  selectPlaceholder: { flex: 1, fontSize: fontSize.md, color: colors.textMuted, fontFamily: fontFamily.regular },
-  selectOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', paddingHorizontal: 24 },
-  selectDropdown: {
-    backgroundColor: colors.white, borderRadius: borderRadius.lg, overflow: 'hidden',
-    borderWidth: 1, borderColor: colors.border,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15, shadowRadius: 12, elevation: 6,
-  },
-  selectDropdownScroll: { maxHeight: 320 },
-  selectDropdownContent: { padding: 6, gap: 4 },
-  selectOption: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    paddingVertical: 12, paddingHorizontal: 12, borderRadius: borderRadius.md,
-    backgroundColor: colors.white,
-  },
-  selectOptionActive: { backgroundColor: '#F0FDF4' },
-  selectOptionText: { flex: 1, fontSize: fontSize.md, color: colors.text, fontFamily: fontFamily.medium },
-  selectOptionTextActive: { color: colors.primary, fontFamily: fontFamily.semiBold },
-
-  // Error
   errorText: { fontSize: fontSize.sm, color: colors.error, marginTop: 4, fontFamily: fontFamily.regular },
 
   // Wizard progress
-  wizProgressWrap: { marginBottom: spacing.sm, gap: 6 },
-  wizProgressTrack: { height: 6, borderRadius: 3, backgroundColor: colors.gray100, overflow: 'hidden' },
-  wizProgressFill: { height: 6, borderRadius: 3, backgroundColor: colors.primary },
-  wizStepLabel: { fontSize: fontSize.xs, color: colors.textSecondary, fontFamily: fontFamily.medium },
-
-  // Content summary pill
-  contentSummary: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: spacing.md,
-    padding: spacing.sm, borderRadius: borderRadius.md, backgroundColor: '#F0FDF4',
-    borderWidth: 1, borderColor: colors.border,
-  },
-  contentSummaryText: { flex: 1, fontSize: fontSize.sm, color: colors.text, fontFamily: fontFamily.medium },
-
-  // Deadline picker
-  dpCard: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.lg,
-    padding: spacing.sm, backgroundColor: colors.white,
-  },
-  dpHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
-  dpNavBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.gray100 },
-  dpMonthTitle: { fontSize: fontSize.md, fontFamily: fontFamily.semiBold, color: colors.text },
-  dpWeekRow: { flexDirection: 'row', marginBottom: 4 },
-  dpWeekLabel: { width: `${100 / 7}%`, textAlign: 'center', fontSize: fontSize.xs, color: colors.textMuted, fontFamily: fontFamily.medium },
-  dpGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  dpCell: { width: `${100 / 7}%`, aspectRatio: 1, alignItems: 'center', justifyContent: 'center', borderRadius: borderRadius.sm },
-  dpCellSelected: { backgroundColor: colors.primary },
-  dpCellDisabled: { opacity: 0.3 },
-  dpCellText: { fontSize: fontSize.sm, color: colors.text, fontFamily: fontFamily.regular },
-  dpCellTextSelected: { color: colors.white, fontFamily: fontFamily.semiBold },
-  dpCellTextDisabled: { color: colors.textMuted },
-  dpSelectedLabel: { fontSize: fontSize.sm, color: colors.textSecondary, fontFamily: fontFamily.medium, marginTop: spacing.sm },
-
-  // Study window cards
-  windowCard: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md,
-    padding: spacing.sm, backgroundColor: colors.white,
-  },
-  windowCardDisabled: { backgroundColor: colors.gray50, opacity: 0.75 },
-  windowHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  windowTitle: { fontSize: fontSize.md, fontFamily: fontFamily.semiBold, color: colors.text },
-  skipToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  skipCheckbox: {
-    width: 18, height: 18, borderRadius: 4, borderWidth: 2, borderColor: colors.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  skipCheckboxOn: { backgroundColor: colors.textMuted, borderColor: colors.textMuted },
-  skipLabel: { fontSize: fontSize.xs, color: colors.textSecondary, fontFamily: fontFamily.medium },
-  windowTimeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: spacing.sm },
-
-  // Recap card
-  recapCard: {
-    borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md,
-    padding: spacing.sm, backgroundColor: colors.gray50, gap: 6,
-  },
-  recapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
-  recapKey: { fontSize: fontSize.sm, color: colors.textSecondary, fontFamily: fontFamily.medium },
-  recapVal: { flex: 1, fontSize: fontSize.sm, color: colors.text, fontFamily: fontFamily.semiBold, textAlign: 'right' },
-
-  // Pattern selector
-  patternOption: {
-    flex: 1, padding: spacing.sm, borderRadius: borderRadius.md,
-    borderWidth: 1, borderColor: colors.border, alignItems: 'center', backgroundColor: colors.white,
-  },
-  patternOptionActive: { borderColor: colors.primary, backgroundColor: '#F0FDF4' },
-  patternOptionText: { fontSize: fontSize.sm, color: colors.textSecondary, fontFamily: fontFamily.medium },
-  patternOptionTextActive: { color: colors.primary, fontFamily: fontFamily.semiBold },
-
-  // Wizard footer nav
-  wizFooter: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.lg },
-  wizFooterBack: {
-    paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderRadius: borderRadius.md,
-    borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
-  },
-  wizFooterNext: {
-    flex: 1, backgroundColor: colors.primary, borderRadius: borderRadius.md,
-    padding: spacing.md, alignItems: 'center', justifyContent: 'center',
-  },
 });

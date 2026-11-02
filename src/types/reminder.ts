@@ -42,6 +42,9 @@ export interface ReminderTarget {
 /** Channel chosen per study session in the timetable. No value on the session (null) means no reminder. */
 export type ReminderChannel = 'call' | 'message' | 'notification' | 'email';
 
+/** Plan-creation and reminder-settings choice. 'none' means the student turned reminders off. */
+export type ReminderChoice = ReminderChannel | 'none';
+
 export interface ReminderInput {
   id?: string;                 // present when editing
   text: string;
