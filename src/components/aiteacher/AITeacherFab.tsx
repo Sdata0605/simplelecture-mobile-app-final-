@@ -15,6 +15,7 @@ const ORB = 42; // the orb's body; its glow reaches about twice that, past the t
 const LABEL_DELAY_MS = 1200;
 const LABEL_SHOWN_MS = 5500;
 const LABEL_HEIGHT = 32;
+const LABEL_WIDTH = 168; // wide enough for the longest label on one line
 /** A touch that moves less than this is a tap, not a drag. */
 const TAP_SLOP = 8;
 
@@ -135,7 +136,7 @@ export function AITeacherFab({ hasActivePlan, onPress, box, placement, onPlaceme
           { opacity: label, transform: [{ translateX: label.interpolate({ inputRange: [0, 1], outputRange: [labelFrom, 0] }) }] },
         ]}
       >
-        <Text style={styles.labelText}>{hasActivePlan ? 'Ask AI Teacher' : 'Meet your AI Teacher'}</Text>
+        <Text style={styles.labelText} numberOfLines={1}>{hasActivePlan ? 'Ask AI Teacher' : 'Meet your AI Teacher'}</Text>
       </Animated.View>
 
       <Animated.View pointerEvents="none" style={{ transform: [{ translateY: bob }] }}>
@@ -170,6 +171,7 @@ const styles = StyleSheet.create({
   label: {
     position: 'absolute',
     top: (HIT - LABEL_HEIGHT) / 2,
+    width: LABEL_WIDTH,
     height: LABEL_HEIGHT,
     justifyContent: 'center',
     paddingHorizontal: 12,

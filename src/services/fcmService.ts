@@ -118,9 +118,21 @@ export async function setupFcmForegroundListener(
 
   const messaging = (await import('@react-native-firebase/messaging')).default;
   const unsubscribe = messaging().onMessage(async (remoteMessage) => {
+    const data = remoteMessage.data as Record<string, string> | undefined;
+
+    // reminder_audio is a data-only push: hand it to the audio pipeline, no in-app banner.
+    if (data?.type === 'reminder_audio') {
+      try {
+        const { handleReminderAudioPush } = await import('./reminders/audioPush');
+        await handleReminderAudioPush(data);
+      } catch (e) {
+        console.warn('[FCM] reminder_audio handling failed:', e);
+      }
+      return;
+    }
+
     const title = remoteMessage.notification?.title ?? 'Simple Lecture';
     const body = remoteMessage.notification?.body ?? '';
-    const data = remoteMessage.data as Record<string, string> | undefined;
     onMessage(title, body, data);
   });
   return unsubscribe;

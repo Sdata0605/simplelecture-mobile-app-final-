@@ -133,6 +133,16 @@ async function downloadToLocal(
   }
 }
 
+/**
+ * Downloads a reminder voice file to reminders-audio/<hash>.<fmt> (used by the background
+ * push). Throws ReminderAudioError when the file cannot be written.
+ */
+export async function downloadReminderAudio(hash: string, fmt: AudioFormat, url: string): Promise<string> {
+  const uri = await downloadToLocal(hash, fmt, url);
+  if (!uri) throw new ReminderAudioError('download', 0, 'Could not download reminder audio');
+  return uri;
+}
+
 /** Calls the reminder-call-audio edge function. Throws ReminderAudioError on failure. */
 export async function generateAudio(
   params: GenerateAudioParams,

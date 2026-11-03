@@ -19,6 +19,7 @@ function clock(iso: string): string {
 interface SessionActionsSheetProps {
   session: StudyTimetableSession | null;
   onClose(): void;
+  onOpen?(): void;
   onDone(): void;
   onSkip(): void;
   onEdit(): void;
@@ -27,7 +28,7 @@ interface SessionActionsSheetProps {
 }
 
 export default function SessionActionsSheet({
-  session, onClose, onDone, onSkip, onEdit, onDelete, busy,
+  session, onClose, onOpen, onDone, onSkip, onEdit, onDelete, busy,
 }: SessionActionsSheetProps) {
   const insets = useSafeAreaInsets();
   const isPending = session?.status === 'pending';
@@ -56,6 +57,19 @@ export default function SessionActionsSheet({
                   <Ionicons name="close" size={22} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
+
+              {onOpen && (
+                <TouchableOpacity
+                  style={[styles.bigBtn, styles.outlineBtn, busy && styles.disabled]}
+                  onPress={() => { onClose(); onOpen(); }}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open lecture"
+                >
+                  <Ionicons name="play-circle-outline" size={20} color={colors.text} />
+                  <Text style={styles.outlineBtnText}>Open lecture</Text>
+                </TouchableOpacity>
+              )}
 
               {isPending ? (
                 <>

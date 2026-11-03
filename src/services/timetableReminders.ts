@@ -2,6 +2,7 @@
 // Plan default lives in study_timetables.plan_metadata.reminderChannel (jsonb, no migration needed).
 // Session channel lives in study_timetable_sessions.reminder_channel.
 import {
+  authHeaders,
   restFetch,
   patchSession,
   patchSessions,
@@ -11,6 +12,8 @@ import {
   type StudyTimetableSession,
   type ReminderChoiceValue,
 } from '../hooks/useStudyTimetable';
+import { SUPABASE_URL } from './supabase';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 import type { ReminderChannel } from '../types/reminder';
 
 /** What the student picks: a channel, or 'none' (Off). null in the data model means legacy, not off. */
@@ -80,6 +83,32 @@ export async function applyPlanChannel(
   const oldMeta: StudyTimetablePlanMetadata = rows[0]?.plan_metadata ?? {};
   await patchPlanMetadata(planId, { ...oldMeta, reminderChannel: choice });
   return { changed, noneUnsupported };
+}
+
+/**
+ * Server prepares the day-1 call voice for a plan (reminder-audio-prefetch, plan mode).
+ * Never throws: any network, timeout, or HTTP error comes back as { ok: false }.
+ */
+export async function prepareDayOneAudio(
+  timetableId: string,
+): Promise<{ ok: boolean; ready?: number; failed?: number }> {
+  try {
+    const headers = await authHeaders();
+    const res = await fetchWithTimeout(
+      `${SUPABASE_URL}/functions/v1/reminder-audio-prefetch`,
+      { method: 'POST', headers, body: JSON.stringify({ timetable_id: timetableId, days: 1 }) },
+      30000,
+    );
+    if (!res.ok) return { ok: false };
+    const body = (await res.json()) as { ready?: unknown; failed?: unknown };
+    return {
+      ok: true,
+      ready: typeof body?.ready === 'number' ? body.ready : undefined,
+      failed: typeof body?.failed === 'number' ? body.failed : undefined,
+    };
+  } catch {
+    return { ok: false };
+  }
 }
 
 /** Sets one session's channel. Undo calls this again with the previous value. */

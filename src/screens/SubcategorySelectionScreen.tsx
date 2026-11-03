@@ -200,6 +200,8 @@ export default function SubcategorySelectionScreen({ navigation, route }: any) {
   };
 
   const completeOnboarding = async () => {
+    // Subcategory ids for the Home feed; top-level ids are saved in InterestSelectionScreen.
+    await AsyncStorage.setItem('@user_subcategories', JSON.stringify(selectedIds));
     await AsyncStorage.setItem('@interests_selected', 'true');
     markInterestsSelected();
     const initialTab = user ? await resolveLandingTab(user.id) : 'Home';

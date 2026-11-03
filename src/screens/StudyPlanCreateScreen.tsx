@@ -23,7 +23,7 @@ import {
 } from '../components/timetable/planWizard/state';
 import { useSubjectsForCourse, useChaptersForSubject, useTopicsForChapter, useScopeContent } from '../hooks/useScopeContent';
 import { evaluateFeasibility, generatePlan, GenerateResult } from '../services/studyPlanApi';
-import { applyPlanChannel } from '../services/timetableReminders';
+import { applyPlanChannel, prepareDayOneAudio } from '../services/timetableReminders';
 import { syncReminders } from '../services/reminders';
 import { FEATURES } from '../constants/featureFlags';
 import { setCourseRemindersOff } from '../services/localReminderPrefs';
@@ -186,6 +186,8 @@ export default function StudyPlanCreateScreen() {
   // ─── save ──────────────────────────────────────────────────────────────────
   const [result, setResult] = useState<GenerateResult | null>(null);
   const [reminderFailed, setReminderFailed] = useState(false);
+  // Text on the saving overlay. Changes to the call-voice step while the plan is being saved.
+  const [savingNote, setSavingNote] = useState<string | null>(null);
 
   async function savePlan() {
     if (saving || saved) return;
@@ -195,6 +197,7 @@ export default function StudyPlanCreateScreen() {
       // The plan exists now. A channel failure must not look like a failed save (spec C.1 step 10).
       // 'none' goes through the service's own fallback (null until the DB migration is applied).
       let channelFailed = false;
+      let serverMode = false;
       if (remindersOn && state.reminder !== null) {
         try {
           // Probe again at save time (cached for 12 h) so the choice matches what the server can store.
@@ -202,6 +205,7 @@ export default function StudyPlanCreateScreen() {
           if (mode.status === 'full') {
             if (!res.timetable_id) throw new Error('missing timetable_id');
             await applyPlanChannel(res.timetable_id, state.reminder);
+            serverMode = true;
           } else if (courseId) {
             // Basic mode: the choice lives on this phone. 'none' means No reminders for this course.
             await setCourseRemindersOff(courseId, state.reminder === 'none');
@@ -209,6 +213,19 @@ export default function StudyPlanCreateScreen() {
           }
         } catch {
           channelFailed = true;
+        }
+      }
+      // Call reminders need day-1 voice ready before the plan is final. Failure only warns; the save continues.
+      if (serverMode && !channelFailed && state.reminder === 'call' && res.timetable_id) {
+        setSavingNote('Preparing your first call voice…');
+        let audio: { ok: boolean };
+        try {
+          audio = await prepareDayOneAudio(res.timetable_id);
+        } finally {
+          setSavingNote(null);
+        }
+        if (!audio.ok) {
+          Alert.alert('Voice not ready', 'Your plan is saved. The call voice will be prepared later.');
         }
       }
       if (FEATURES.timetableReminders) {
@@ -379,7 +396,7 @@ export default function StudyPlanCreateScreen() {
       {saving && (
         <View style={styles.savingOverlay} accessibilityLiveRegion="polite">
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.savingText}>Creating your plan...</Text>
+          <Text style={styles.savingText}>{savingNote ?? 'Creating your plan...'}</Text>
         </View>
       )}
     </KeyboardShiftView>

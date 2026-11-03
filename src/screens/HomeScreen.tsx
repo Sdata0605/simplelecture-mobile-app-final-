@@ -72,14 +72,23 @@ export default function HomeScreen() {
     try {
       // Purchased / enrolled courses for the signed-in user (shown in their own section)
       const enrolledPromise = user?.id
-        ? supabase.getEnrolledMyCoursesWithCategories(user.id)
+        ? supabase.getEnrolledCoursesWithCategories(user.id)
         : Promise.resolve({ success: true, courses: [] as EnrolledCourseWithCategory[] });
 
-      let savedInterests: string[] = [];
-      try {
-        const raw = await AsyncStorage.getItem('@user_interests');
-        if (raw) savedInterests = JSON.parse(raw);
-      } catch {}
+      // Top-level category picks + subcategory picks, merged and de-duplicated
+      const savedIds: string[] = [];
+      for (const key of ['@user_interests', '@user_subcategories']) {
+        try {
+          const raw = await AsyncStorage.getItem(key);
+          const parsed = raw ? JSON.parse(raw) : [];
+          if (Array.isArray(parsed)) {
+            parsed.forEach((id: any) => {
+              if (typeof id === 'string') savedIds.push(id);
+            });
+          }
+        } catch {}
+      }
+      const savedInterests = Array.from(new Set(savedIds));
 
       // Expand selected top-level categories to include all descendant categories
       let categoryIds: string[] = [];
@@ -101,7 +110,7 @@ export default function HomeScreen() {
       if (categoryIds.length > 0) {
         // Personalized: derive all discovery sections from the category-restricted pool only
         const [poolRes, enrolledRes] = await Promise.all([
-          supabase.getMyCoursesByCategory(categoryIds),
+          supabase.getCoursesByCategory(categoryIds),
           enrolledPromise,
         ]);
 
@@ -130,10 +139,13 @@ export default function HomeScreen() {
           setNewestMyCourses(newest);
           setBestMyCourses(best);
         } else {
-          // Selected categories have no courses yet -> graceful featured fallback
-          const fallbackRes = await supabase.getFeaturedMyCourses(3);
+          // Selected categories have no courses yet -> graceful fallback so New Courses is never empty
+          const [fallbackRes, newestRes] = await Promise.all([
+            supabase.getFeaturedCourses(3),
+            supabase.getNewestCourses(5),
+          ]);
           setFeaturedMyCourses(fallbackRes.success && fallbackRes.courses ? fallbackRes.courses : []);
-          setNewestMyCourses([]);
+          setNewestMyCourses(newestRes.success && newestRes.courses ? newestRes.courses : []);
           setBestMyCourses([]);
         }
 
@@ -141,9 +153,9 @@ export default function HomeScreen() {
       } else {
         // No saved interests -> fall back to the prior all-category behavior so Home isn't empty
         const [featuredRes, newestRes, bestRes, enrolledRes] = await Promise.all([
-          supabase.getFeaturedMyCourses(3),
-          supabase.getNewestMyCourses(5),
-          supabase.getBestMyCourses(5),
+          supabase.getFeaturedCourses(3),
+          supabase.getNewestCourses(5),
+          supabase.getBestCourses(5),
           enrolledPromise,
         ]);
 
@@ -152,6 +164,8 @@ export default function HomeScreen() {
         setBestMyCourses(bestRes.success && bestRes.courses ? bestRes.courses : []);
         setEnrolledMyCourses(enrolledRes.success && enrolledRes.courses ? enrolledRes.courses : []);
       }
+    } catch (e) {
+      console.warn('[Home] loadHomeData failed', e);
     } finally {
       setLoadingFeatured(false);
       setLoadingNewest(false);
@@ -352,201 +366,6 @@ export default function HomeScreen() {
                         style={styles.courseCard}
                         onPress={() => navigation.navigate('ViewCourse', { courseId: course.id })}
                         data-testid={`card-featured-course-${course.id}`}
-                      >
-                        {course.thumbnail_url && !course.thumbnail_url.startsWith('data:') ? (
-                          <Image 
-                            source={{ uri: course.thumbnail_url }} 
-                            style={styles.courseImagePlaceholder}
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <LinearGradient
-                            colors={['#DCFCE7', '#D1FAE5', '#BBF7D0']}
-                            style={styles.courseImagePlaceholder}
-                          >
-                            <View style={styles.smallPlayIcon}>
-                              <Ionicons name="play" size={20} color={colors.primary} />
-                            </View>
-                          </LinearGradient>
-                        )}
-                        <View style={styles.cardInfo}>
-                          <Text style={styles.cardTitle} numberOfLines={2}>{course.name}</Text>
-                          {course.short_description && (
-                            <Text style={styles.cardDescription} numberOfLines={1}>
-                              {course.short_description}
-                            </Text>
-                          )}
-                          {!!course.rating && (
-                            <View style={styles.ratingRow}>
-                              <Text style={styles.ratingNumber}>{course.rating.toFixed(1)}</Text>
-                              <View style={styles.starsRow}>
-                                {[1, 2, 3, 4, 5].map((i) => (
-                                  <Ionicons 
-                                    key={i} 
-                                    name={i <= Math.floor(course.rating || 0) ? "star" : i - 0.5 <= (course.rating || 0) ? "star-half" : "star-outline"} 
-                                    size={12} 
-                                    color="#F59E0B" 
-                                  />
-                                ))}
-                              </View>
-                              {!!course.review_count && (
-                                <Text style={styles.reviewCount}>({course.review_count.toLocaleString()})</Text>
-                              )}
-                            </View>
-                          )}
-                          <Text style={styles.cardPrice}>{formatPrice(course.price_inr)}</Text>
-                          {course.is_coming_soon ? (
-                            <View style={styles.comingSoonBadge}>
-                              <Text style={styles.comingSoonText}>Coming Soon</Text>
-                            </View>
-                          ) : (!!course.rating && course.rating >= 4.5 && (
-                            <View style={styles.bestsellerBadge}>
-                              <Text style={styles.bestsellerText}>Bestseller</Text>
-                            </View>
-                          ))}
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </ScrollView>
-              )}
-            </View>
-
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={styles.sectionTitleRow}>
-                  <View style={styles.sectionIconContainer}>
-                    <Ionicons name="sparkles" size={18} color={colors.primary} />
-                  </View>
-                  <Text style={styles.sectionTitle}>Newest MyCourses</Text>
-                </View>
-                <TouchableOpacity style={styles.viewAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}>
-                  <Text style={styles.viewAll}>View All</Text>
-                  <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-                </TouchableOpacity>
-              </View>
-              {loadingNewest ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
-                  <View style={styles.coursesRow}>
-                    <CourseCardSkeleton variant="compact" />
-                    <CourseCardSkeleton variant="compact" />
-                    <CourseCardSkeleton variant="compact" />
-                  </View>
-                </ScrollView>
-              ) : newestMyCourses.length === 0 ? (
-                <View style={styles.emptyState}>
-                  <View style={styles.emptyIconContainer}>
-                    <Ionicons name="school-outline" size={40} color={colors.primary} />
-                  </View>
-                  <Text style={styles.emptyStateText}>No new courses available</Text>
-                </View>
-              ) : (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
-                  <View style={styles.coursesRow}>
-                    {newestMyCourses.map((course) => (
-                      <TouchableOpacity 
-                        key={course.id} 
-                        style={styles.courseCard}
-                        onPress={() => navigation.navigate('ViewCourse', { courseId: course.id })}
-                        data-testid={`card-newest-course-${course.id}`}
-                      >
-                        {course.thumbnail_url && !course.thumbnail_url.startsWith('data:') ? (
-                          <Image 
-                            source={{ uri: course.thumbnail_url }} 
-                            style={styles.courseImagePlaceholder}
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <LinearGradient
-                            colors={['#DCFCE7', '#D1FAE5', '#BBF7D0']}
-                            style={styles.courseImagePlaceholder}
-                          >
-                            <View style={styles.smallPlayIcon}>
-                              <Ionicons name="play" size={20} color={colors.primary} />
-                            </View>
-                          </LinearGradient>
-                        )}
-                        <View style={styles.cardInfo}>
-                          <Text style={styles.cardTitle} numberOfLines={2}>{course.name}</Text>
-                          {course.short_description && (
-                            <Text style={styles.cardDescription} numberOfLines={1}>
-                              {course.short_description}
-                            </Text>
-                          )}
-                          {!!course.rating && (
-                            <View style={styles.ratingRow}>
-                              <Text style={styles.ratingNumber}>{course.rating.toFixed(1)}</Text>
-                              <View style={styles.starsRow}>
-                                {[1, 2, 3, 4, 5].map((i) => (
-                                  <Ionicons 
-                                    key={i} 
-                                    name={i <= Math.floor(course.rating || 0) ? "star" : i - 0.5 <= (course.rating || 0) ? "star-half" : "star-outline"} 
-                                    size={12} 
-                                    color="#F59E0B" 
-                                  />
-                                ))}
-                              </View>
-                              {!!course.review_count && (
-                                <Text style={styles.reviewCount}>({course.review_count.toLocaleString()})</Text>
-                              )}
-                            </View>
-                          )}
-                          <Text style={styles.cardPrice}>{formatPrice(course.price_inr)}</Text>
-                          {course.is_coming_soon ? (
-                            <View style={styles.comingSoonBadge}>
-                              <Text style={styles.comingSoonText}>Coming Soon</Text>
-                            </View>
-                          ) : (!!course.rating && course.rating >= 4.5 && (
-                            <View style={styles.bestsellerBadge}>
-                              <Text style={styles.bestsellerText}>Bestseller</Text>
-                            </View>
-                          ))}
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </ScrollView>
-              )}
-            </View>
-
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <View style={styles.sectionTitleRow}>
-                  <View style={styles.sectionIconContainer}>
-                    <Ionicons name="trophy" size={18} color={colors.primary} />
-                  </View>
-                  <Text style={styles.sectionTitle}>Best Rated</Text>
-                </View>
-                <TouchableOpacity style={styles.viewAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'MyCourses' })}>
-                  <Text style={styles.viewAll}>View All</Text>
-                  <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-                </TouchableOpacity>
-              </View>
-              
-              {loadingBest ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
-                  <View style={styles.coursesRow}>
-                    <CourseCardSkeleton variant="compact" />
-                    <CourseCardSkeleton variant="compact" />
-                    <CourseCardSkeleton variant="compact" />
-                  </View>
-                </ScrollView>
-              ) : bestMyCourses.length === 0 ? (
-                <View style={styles.emptyState}>
-                  <View style={styles.emptyIconContainer}>
-                    <Ionicons name="ribbon-outline" size={40} color={colors.primary} />
-                  </View>
-                  <Text style={styles.emptyStateText}>Top rated courses coming soon</Text>
-                </View>
-              ) : (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
-                  <View style={styles.coursesRow}>
-                    {bestMyCourses.map((course) => (
-                      <TouchableOpacity 
-                        key={course.id} 
-                        style={styles.courseCard}
-                        onPress={() => navigation.navigate('ViewCourse', { courseId: course.id })}
-                        data-testid={`card-best-course-${course.id}`}
                       >
                         {course.thumbnail_url && !course.thumbnail_url.startsWith('data:') ? (
                           <Image 

@@ -1362,7 +1362,7 @@ class SupabaseService {
     }
   }
 
-  private async _performRefresh(): Promise<{ success: boolean; error?: string; invalidRefreshToken?: boolean }> {
+  private async _performRefresh(retried = false): Promise<{ success: boolean; error?: string; invalidRefreshToken?: boolean }> {
     let refreshToken: string | null;
     try {
       refreshToken = await AsyncStorage.getItem(REFRESH_TOKEN_KEY);
@@ -1418,6 +1418,22 @@ class SupabaseService {
         /(invalid|expired|revoked|not\s*found|already\s*used)[^.]*refresh\s*token|refresh\s*token[^.]*(invalid|expired|revoked|not\s*found|already\s*used)/i.test(desc);
       const invalid = codeInvalid || descInvalid;
       if (invalid) {
+        console.warn(`[refreshSession] refresh rejected: status=${response.status} code=${code || 'none'} desc=${desc.slice(0, 200) || 'none'} retried=${retried}`);
+        // A rotation race can leave us holding an already-used token while a
+        // newer one was just saved (by another refresh). If the stored token
+        // changed since we read it, retry once with the stored token instead of
+        // logging the user out.
+        if (!retried) {
+          let storedNow: string | null = null;
+          try {
+            storedNow = await AsyncStorage.getItem(REFRESH_TOKEN_KEY);
+          } catch {
+            storedNow = null;
+          }
+          if (storedNow && storedNow !== refreshToken) {
+            return this._performRefresh(true);
+          }
+        }
         this.notifySessionInvalid();
         return { success: false, error: desc || 'Invalid refresh token', invalidRefreshToken: true };
       }

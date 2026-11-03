@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, supabase } from './supabase';
 import { useAuth } from '../context/AuthContext';
 
 export type AITeacherPlanId = 'byok_500' | 'admin_1000';
@@ -232,6 +232,29 @@ export async function recordSubscriptionInDb(sub: AITeacherSubscription): Promis
   }
 }
 
+/**
+ * Looks up the account email in the profiles table, for when the auth user has no email on it.
+ * Returns null on any failure.
+ */
+async function fetchProfileEmail(userId: string): Promise<string | null> {
+  try {
+    const token = await supabase.getAccessToken().catch(() => null);
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=email&id=eq.${encodeURIComponent(userId)}&limit=1`, {
+      method: 'GET',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${token || SUPABASE_ANON_KEY}`,
+      },
+    });
+    if (!response.ok) return null;
+    const rows = await response.json();
+    const email = Array.isArray(rows) ? rows[0]?.email : null;
+    return typeof email === 'string' && email.trim() ? email : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useAITeacherSubscription() {
   const { user, isAuthenticated } = useAuth();
   const [subscription, setSubscription] = useState<AITeacherSubscription | null>(cachedSubscription);
@@ -239,7 +262,10 @@ export function useAITeacherSubscription() {
   const [plans, setPlans] = useState<Record<AITeacherPlanId, AITeacherPlanInfo>>({ ...AI_TEACHER_PLANS });
 
   const checkUserSubscription = useCallback(async (targetEmail?: string | null) => {
-    const email = targetEmail?.toLowerCase().trim();
+    let email = targetEmail?.toLowerCase().trim();
+    if (!email && user?.id) {
+      email = (await fetchProfileEmail(user.id))?.toLowerCase().trim();
+    }
     if (!email) {
       return;
     }
@@ -280,19 +306,26 @@ export function useAITeacherSubscription() {
       }
 
       if (!current || (current.customerEmail && current.customerEmail.toLowerCase() !== email)) {
-        const queryUrl = `${SUPABASE_URL}/rest/v1/sales_leads?select=lead_status,conversation_history,created_at&email=eq.${encodeURIComponent(
-          email
+        // ilike with escaped LIKE wildcards = case-insensitive exact match on the email.
+        const likePattern = email.replace(/[\\%_]/g, (c) => `\\${c}`);
+        const queryUrl = `${SUPABASE_URL}/rest/v1/sales_leads?select=lead_status,conversation_history,created_at&email=ilike.${encodeURIComponent(
+          likePattern
         )}&lead_status=in.(converted_plan_1000,converted_plan_500)&order=created_at.desc&limit=1`;
 
+        // Logged-in user's JWT; anon key only when there is no session.
+        const accessToken = await supabase.getAccessToken().catch(() => null);
         const response = await fetch(queryUrl, {
           method: 'GET',
           headers: {
             'apikey': SUPABASE_ANON_KEY,
-            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Authorization': `Bearer ${accessToken || SUPABASE_ANON_KEY}`,
           },
         });
 
-        if (response.ok) {
+        if (!response.ok) {
+          // Keep any cached plan: a failed lookup says nothing about the purchase.
+          console.warn('[AITeacherSubscription] Lead lookup failed:', response.status, await response.text().catch(() => ''));
+        } else {
           const leads = await response.json();
           if (Array.isArray(leads) && leads.length > 0) {
             const lead = leads[0];
@@ -381,15 +414,15 @@ export function useAITeacherSubscription() {
 
     loadSubscription().then((sub) => {
       setSubscription(sub);
-      if (user?.email) {
-        checkUserSubscription(user.email);
+      if (user?.email || user?.id) {
+        checkUserSubscription(user?.email);
       }
     });
 
     return () => {
       listeners.delete(handleUpdate);
     };
-  }, [user?.email, checkUserSubscription]);
+  }, [user?.id, user?.email, checkUserSubscription]);
 
   const subscribe = useCallback(
     async (

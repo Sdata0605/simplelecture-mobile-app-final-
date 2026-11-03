@@ -3,6 +3,8 @@
 //
 // Request body:
 //   { user_id: string, title: string, body: string, data?: Record<string,string>, platform?: 'android'|'ios' }
+//   With data_only: true → { user_id, data?, platform?, data_only: true } (title/body not required;
+//   sent as a silent data-only FCM message, no notification block)
 //
 // Auth: Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>
 //
@@ -103,12 +105,13 @@ serve(async (req) => {
   try {
     const body = await req.json();
     log('Request body parsed', { user_id: body.user_id, title: body.title, platform: body.platform });
-    const { user_id, title, body: msgBody, data, platform } = body as {
+    const { user_id, title, body: msgBody, data, platform, data_only } = body as {
       user_id: string; title: string; body: string;
-      data?: Record<string, string>; platform?: 'android' | 'ios';
+      data?: Record<string, unknown>; platform?: 'android' | 'ios'; data_only?: boolean;
     };
+    const dataOnly = data_only === true;
 
-    if (!user_id || !title || !msgBody) {
+    if (!user_id || (!dataOnly && (!title || !msgBody))) {
       log('Validation failed — missing required fields');
       return new Response(JSON.stringify({ error: 'user_id, title, body are required' }), {
         status: 400, headers: { 'Content-Type': 'application/json' },
@@ -150,11 +153,29 @@ serve(async (req) => {
         const tokenPrefix = fcm_token.slice(0, 15) + '…';
         log('Sending FCM message', { tokenPrefix, platform: tokenPlatform });
 
-        const message: Record<string, unknown> = {
-          token: fcm_token,
-          notification: { title, body: msgBody },
-        };
-        if (data && Object.keys(data).length > 0) message.data = data;
+        let message: Record<string, unknown>;
+        if (dataOnly) {
+          // FCM data values must be strings: JSON-stringify anything else.
+          const stringData: Record<string, string> = {};
+          for (const [k, v] of Object.entries(data ?? {})) {
+            stringData[k] = typeof v === 'string' ? v : JSON.stringify(v);
+          }
+          message = {
+            token: fcm_token,
+            data: stringData,
+            android: { priority: 'high' },
+            apns: {
+              headers: { 'apns-push-type': 'background', 'apns-priority': '5' },
+              payload: { aps: { 'content-available': 1 } },
+            },
+          };
+        } else {
+          message = {
+            token: fcm_token,
+            notification: { title, body: msgBody },
+          };
+          if (data && Object.keys(data).length > 0) message.data = data;
+        }
 
         const fcmRes = await fetch(FCM_ENDPOINT, {
           method: 'POST',

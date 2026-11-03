@@ -51,6 +51,7 @@ import { useTimetableReminderSupport } from '../hooks/useTimetableReminderSuppor
 import { useReminderPermissions } from '../hooks/useReminderPermissions';
 import { useSubjectsForCourse, useChaptersForSubject, useTopicsForChapter } from '../hooks/useScopeContent';
 import { planDefaultChannel } from '../services/timetableReminders';
+import { planOpenClass } from '../services/reminders/openClass';
 import { syncReminders } from '../services/reminders';
 import { FEATURES } from '../constants/featureFlags';
 import type { ReminderChoice } from '../types/reminder';
@@ -241,6 +242,27 @@ export default function StudyTimetableScreen() {
     const s = actionSession;
     setActionSession(null);
     if (s) setEditSession(s);
+  }
+
+  /** Opens the session's lecture on the topic's Classes tab (falls back to subject or timetable). */
+  function openSessionClass(s: StudyTimetableSession) {
+    const plan = plansQuery.data.find(p => p.id === s.timetable_id);
+    const courseId = plan?.course_id ?? selectedCourseId ?? null;
+    const intent = planOpenClass({
+      courseId,
+      subjectId: s.subject_id,
+      chapterId: s.chapter_id,
+      topicId: s.topic_id,
+      topicTitle: s.title,
+    }).intent;
+    // NavProp is strict; intent.name is a union of route names, so cast like the other dynamic navigate calls here.
+    (navigation as any).navigate(intent.name, intent.params);
+  }
+
+  function openLectureFromActions() {
+    const s = actionSession;
+    setActionSession(null);
+    if (s) openSessionClass(s);
   }
 
   const editDay = editSession ? localDateKey(editSession.scheduled_at) : null;
@@ -443,6 +465,7 @@ export default function StudyTimetableScreen() {
         onClose={() => setActionSession(null)}
         onDone={() => actionSession && runSessionAction(actionSession.id, 'done')}
         onSkip={() => actionSession && runSessionAction(actionSession.id, 'skipped')}
+        onOpen={openLectureFromActions}
         onEdit={openEditFromActions}
         onDelete={() => actionSession && confirmDeleteSession(actionSession)}
         busy={actionBusy}

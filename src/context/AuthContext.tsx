@@ -144,7 +144,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const storedUser = await supabase.getStoredUser();
       const interestsFlag = await AsyncStorage.getItem('@interests_selected');
       const onboardingFlag = await AsyncStorage.getItem('@onboarding_seen');
-      setHasSelectedInterests(interestsFlag === 'true');
+      let interestsSelected = interestsFlag === 'true';
+      // isNewSignup is in-memory only, so a restored user here is never a fresh signup.
+      // Onboarding is for fresh signups only: heal the flag for existing accounts.
+      if (storedUser && !isNewSignup) {
+        interestsSelected = true;
+        await AsyncStorage.setItem('@interests_selected', 'true');
+      }
+      setHasSelectedInterests(interestsSelected);
       setHasSeenOnboarding(onboardingFlag === 'true');
       console.log('[Auth] storedUser:', storedUser ? 'found' : 'none', '| interests:', interestsFlag, '| onboarding:', onboardingFlag);
       if (storedUser) {
@@ -181,10 +188,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsNewSignup(false);
   };
 
+  // Any real login (not a signup) is an existing user, so onboarding must never show for them.
+  const markExistingUserInterestsSelected = () => {
+    setHasSelectedInterests(true);
+    void AsyncStorage.setItem('@interests_selected', 'true');
+  };
+
   const login = async (email: string, password: string) => {
     const result = await supabase.login(email, password);
     if (result.success && result.user) {
       setUser(result.user);
+      markExistingUserInterestsSelected();
       sendWelcomeLoginNotification();
       registerFcmToken(result.user.id);
       incrementSessionAndMaybeReview();
@@ -207,6 +221,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginWithOtp = (userData: User, isSignup: boolean = false) => {
     setUser(userData);
     if (isSignup) setIsNewSignup(true);
+    else markExistingUserInterestsSelected();
     sendWelcomeLoginNotification();
     registerFcmToken(userData.id);
     incrementSessionAndMaybeReview();
@@ -217,6 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (result.success && result.user) {
       setUser(result.user);
       if (isSignup) setIsNewSignup(true);
+      else markExistingUserInterestsSelected();
       sendWelcomeLoginNotification();
       registerFcmToken(result.user.id);
       incrementSessionAndMaybeReview();
