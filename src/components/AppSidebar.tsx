@@ -14,7 +14,7 @@ import { colors, spacing, fontSize, borderRadius } from '../constants/theme';
 import { useAuth } from '../context/AuthContext';
 import { useSidebar } from '../context/SidebarContext';
 import { navigationRef } from '../navigation/AppNavigator';
-import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
+import { useAiTeacherPlan } from '../services/aiTeacherPlan';
 import { openAskAI } from '../services/askAIStore';
 import { FEATURES } from '../constants/featureFlags';
 
@@ -56,7 +56,11 @@ function navigateTo(route: string) {
 export default function AppSidebar() {
   const { isOpen, closeSidebar } = useSidebar();
   const { user, logout } = useAuth();
-  const { hasActivePlan } = useAITeacherSubscription();
+  // Re-checked each time the sidebar opens. Only a server answer of "no plan" hides AI Teacher.
+  const { state: planState, refresh: refreshPlan } = useAiTeacherPlan(!!user);
+  useEffect(() => {
+    if (isOpen) refreshPlan();
+  }, [isOpen, refreshPlan]);
 
   const translateX = useRef(new Animated.Value(-PANEL_WIDTH)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -166,7 +170,7 @@ export default function AppSidebar() {
           >
             <View style={styles.sidebarMenu}>
               {MENU_ITEMS.filter((item) => {
-                if (item.route === 'AITeacher' && !hasActivePlan) return false;
+                if (item.route === 'AITeacher' && planState === 'inactive') return false;
                 if (item.flag === 'reminders' && !FEATURES.reminders) return false;
                 return true;
               }).map((item) => {

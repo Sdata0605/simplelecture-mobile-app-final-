@@ -16,8 +16,8 @@ describe('aiTeacherDestination', () => {
     expect(aiTeacherDestination(true)).toBe('teacher');
   });
 
-  it('shows the plans to a student without one', () => {
-    expect(aiTeacherDestination(false)).toBe('plans');
+  it('sends every logged-in student to the AI Teacher (no plans any more)', () => {
+    expect(aiTeacherDestination(false)).toBe('teacher');
   });
 });
 

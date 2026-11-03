@@ -33,6 +33,8 @@ export interface ReminderCallAudioResult {
 }
 
 const RING_VIBRATION_PATTERN = [0, 1000, 800];
+// The ring stops by itself after this long if nobody answers.
+const RING_DURATION_MS = 20_000;
 // A primed sound nobody answers is unloaded after this long.
 const PRIME_TTL_MS = 60000;
 
@@ -375,9 +377,14 @@ export function useRingtone(active: boolean): void {
     })();
 
     Vibration.vibrate(RING_VIBRATION_PATTERN, true);
+    const stopTimer = setTimeout(() => {
+      Vibration.cancel();
+      if (sound) sound.stopAsync().catch(() => {});
+    }, RING_DURATION_MS);
 
     return () => {
       cancelled = true;
+      clearTimeout(stopTimer);
       Vibration.cancel();
       if (sound) {
         sound.setOnPlaybackStatusUpdate(null);

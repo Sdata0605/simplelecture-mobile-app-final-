@@ -6,14 +6,14 @@ import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSidebar } from '../../context/SidebarContext';
-import { aiTeacherDestination } from '../../services/aiTeacherPromo';
-import { useAITeacherSubscription } from '../../services/aiTeacherSubscription';
+import { useAuth } from '../../context/AuthContext';
+import { useAiTeacherPlan } from '../../services/aiTeacherPlan';
 import { clampPlacement, parsePlacement, shouldShowAIFab, type FabBox, type FabPlacement } from '../../services/aiFab';
 import { openAskAI, useAskAIRequest } from '../../services/askAIStore';
 import { useCurrentRouteName } from '../../services/currentRoute';
 import { tabBarTop } from '../CustomTabBar';
 import { AITeacherFab } from './AITeacherFab';
-import { AITeacherPlanModal } from './AITeacherPlanModal';
+import { navigationRef } from '../../navigation/AppNavigator';
 
 const PLACEMENT_KEY = '@ai_fab_placement';
 const FAB_SIZE = 64;
@@ -23,8 +23,12 @@ export function GlobalAIButton() {
   const routeName = useCurrentRouteName();
   const askOpen = useAskAIRequest() !== null;
   const { isOpen: sidebarOpen } = useSidebar();
-  const { hasActivePlan } = useAITeacherSubscription();
-  const [plansOpen, setPlansOpen] = useState(false);
+  const { user } = useAuth();
+  // Re-checked on every route change, so a purchase made on another screen is picked up here.
+  const { state: planState, refresh: refreshPlan } = useAiTeacherPlan(!!user);
+  useEffect(() => {
+    refreshPlan();
+  }, [routeName, refreshPlan]);
   const [box, setBox] = useState<FabBox | null>(null);
   // What the student chose; until they drag it, it rests just above the tab bar, on the right.
   const [saved, setSaved] = useState<FabPlacement | null>(null);
@@ -47,11 +51,12 @@ export function GlobalAIButton() {
     AsyncStorage.setItem(PLACEMENT_KEY, JSON.stringify(placement)).catch(() => {});
   }, []);
 
-  // The Ask AI screen (the one the lecture player has) with a plan, otherwise the plans.
+  // Only a server answer of "no plan" goes to the plans page. Active, unknown or still loading opens Ask AI,
+  // which shows its own spinner or retry message.
   const open = useCallback(() => {
-    if (aiTeacherDestination(hasActivePlan) === 'teacher') openAskAI();
-    else setPlansOpen(true);
-  }, [hasActivePlan]);
+    if (planState === 'inactive') navigationRef.current?.navigate('AITeacherPlus');
+    else openAskAI();
+  }, [planState]);
 
   const landscape = !!box && box.width > box.height;
   const visible = loaded && !!box && shouldShowAIFab({ routeName, askOpen, sidebarOpen, landscape });
@@ -61,14 +66,13 @@ export function GlobalAIButton() {
     <View pointerEvents="box-none" style={styles.overlay} onLayout={onLayout}>
       {visible && box && (
         <AITeacherFab
-          hasActivePlan={hasActivePlan}
+          hasActivePlan={planState !== 'inactive'}
           onPress={open}
           box={box}
           placement={clampPlacement(placement, box, insets, FAB_SIZE)}
           onPlacementChange={onPlacementChange}
         />
       )}
-      <AITeacherPlanModal visible={plansOpen} onClose={() => setPlansOpen(false)} />
     </View>
   );
 }

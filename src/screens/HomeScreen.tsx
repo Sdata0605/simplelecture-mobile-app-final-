@@ -26,9 +26,8 @@ import HeaderMenuButton from '../components/HeaderMenuButton';
 import HomeHeroBanner from '../components/HomeHeroBanner';
 import HeroVideoBanner from '../components/HeroVideoBanner';
 import AITeacherShowcase from '../components/aiteacher/AITeacherShowcase';
-import { AITeacherPlanModal } from '../components/aiteacher/AITeacherPlanModal';
 import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
-import { aiTeacherDestination } from '../services/aiTeacherPromo';
+import { useAiTeacherPlan } from '../services/aiTeacherPlan';
 import { openAskAI } from '../services/askAIStore';
 import { useCourseFreePreviewLimits } from '../hooks/useCourseFreeAccess';
 
@@ -44,8 +43,14 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { user, refreshUser } = useAuth();
   const { openSidebar } = useSidebar();
-  const { hasActivePlan, plans } = useAITeacherSubscription();
-  const [plansOpen, setPlansOpen] = useState(false);
+  const { plans } = useAITeacherSubscription();
+  // The server's answer on the Plus plan. The purchase card only shows when it said 'inactive'.
+  const { state: planState, refresh: refreshPlan } = useAiTeacherPlan(!!user);
+  useFocusEffect(
+    useCallback(() => {
+      refreshPlan();
+    }, [refreshPlan]),
+  );
   const { aiLimit: sslcAiLimit, doubtsLimit: sslcDoubtsLimit } = useCourseFreePreviewLimits(SSLC_COURSE_ID);
 
   const [featuredMyCourses, setFeaturedMyCourses] = useState<ExploreCourse[]>([]);
@@ -58,11 +63,11 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [notifUnreadCount, setNotifUnreadCount] = useState(0);
 
-  // The promo card leads to the Ask AI screen (the one the lecture player has) with a plan, otherwise to the plans.
+  // The promo card leads to Ask AI, except when the server said there is no plan: then to the plans.
   const openAITeacher = useCallback(() => {
-    if (aiTeacherDestination(hasActivePlan) === 'teacher') openAskAI();
-    else setPlansOpen(true);
-  }, [hasActivePlan]);
+    if (planState === 'inactive') navigation.navigate('AITeacherPlus');
+    else openAskAI();
+  }, [planState, navigation]);
 
   const loadHomeData = useCallback(async () => {
     setLoadingFeatured(true);
@@ -274,7 +279,7 @@ export default function HomeScreen() {
 
             <HeroVideoBanner />
 
-            {!hasActivePlan && <AITeacherShowcase price={plans.byok_500.price} onPress={openAITeacher} />}
+            {planState === 'inactive' && <AITeacherShowcase price={plans.byok_500.price} onPress={openAITeacher} />}
 
             {enrolledMyCourses.length > 0 && (
               <View style={styles.section}>
@@ -429,10 +434,7 @@ export default function HomeScreen() {
             <View style={styles.bottomSpacer} />
           </ScrollView>
         </View>
-      </View>
-
-      <AITeacherPlanModal visible={plansOpen} onClose={() => setPlansOpen(false)} />
-    </View>
+      </View>    </View>
   );
 }
 

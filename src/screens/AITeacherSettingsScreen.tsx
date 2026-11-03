@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,101 +8,282 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { colors, spacing, fontSize, borderRadius } from '../constants/theme';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { useAuth } from '../context/AuthContext';
 import {
   PRESET_OPTIONS,
   VOICE_OPTIONS,
   LANGUAGE_OPTIONS,
   DEFAULT_PREFS,
   TeacherPrefs,
+  getCachedPrefs,
   loadPrefs,
   savePrefs,
 } from '../services/aiTeacherPrefs';
-import { testGeminiApiKey } from '../services/aiTeacherService';
-import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
-import { AITeacherPlanModal } from '../components/aiteacher/AITeacherPlanModal';
+import {
+  AiTeacherKey,
+  AiTeacherSettings,
+  addAiTeacherKey,
+  deleteAiTeacherKey,
+  getAiTeacherSettings,
+  reorderAiTeacherKeys,
+  saveAiTeacherPrefs,
+  setActiveAiTeacherKey,
+  testAiTeacherKey,
+  updateAiTeacherKey,
+} from '../services/aiTeacherKeys';
+import { PlanState, resolvePlanState } from '../services/aiTeacherPlan';
+import { openAskAI } from '../services/askAIStore';
 import { AITeacherGuideModal } from '../components/aiteacher/AITeacherGuideModal';
 import { KeyboardShiftView } from '../components/keyboard/keyboardStick';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
+const GET_KEY_URL = 'https://aistudio.google.com/app/apikey';
+
+function statusChip(status: string): { label: string; bg: string; fg: string } {
+  switch (status) {
+    case 'active':
+      return { label: 'Active', bg: '#D1FAE5', fg: '#065F46' };
+    case 'rate_limited':
+      return { label: 'Rate limited', bg: '#FEF3C7', fg: '#92400E' };
+    case 'invalid':
+      return { label: 'Invalid', bg: '#FEE2E2', fg: '#B91C1C' };
+    default:
+      return { label: 'Untested', bg: '#F3F4F6', fg: colors.textSecondary };
+  }
+}
+
+function errorMessage(err: any): string {
+  switch (err?.code) {
+    case 'KEY_LIMIT':
+      return 'You already have 10 keys. Delete one to add another.';
+    case 'DUPLICATE_KEY':
+      return 'That key is already saved.';
+    case 'INVALID_KEY':
+      return 'Google did not accept this key. Check that you copied the whole key.';
+    case 'NOT_FOUND':
+      return 'That key no longer exists. Pull to refresh and try again.';
+    case 'UNAUTHORIZED':
+      return 'Please log in again to manage your keys.';
+    case 'PLAN_REQUIRED':
+      return 'Buy AI Teacher Plus (Rs 500) to add and manage your keys.';
+    default:
+      return String(err?.message || 'Something went wrong. Please try again.');
+  }
+}
+
 export default function AITeacherSettingsScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
-  const { isAuthenticated } = useAuth();
-  const { currentPlan, hasActivePlan, isPlan500, isPlan1000 } = useAITeacherSubscription();
+  const route = useRoute();
+  const routeParams = route.params as { fromAskAI?: boolean; justPurchased?: boolean } | undefined;
+  const fromAskAI = !!routeParams?.fromAskAI;
+  const justPurchased = !!routeParams?.justPurchased;
 
-  const [draft, setDraft] = useState<TeacherPrefs>(DEFAULT_PREFS);
-  const [showKey, setShowKey] = useState(false);
-  const [testingKey, setTestingKey] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [savedSuccess, setSavedSuccess] = useState(false);
-  const [savingKey, setSavingKey] = useState(false);
-  const [keySaved, setKeySaved] = useState(false);
-
-  const [planModalOpen, setPlanModalOpen] = useState(false);
-  const [guideModalOpen, setGuideModalOpen] = useState(false);
-  const [guideTab, setGuideTab] = useState<'how-to-use' | 'api-key'>('api-key');
-
+  // Opened from Ask AI: going back (or unmounting for any reason) reopens Ask AI.
+  const fromAskAIRef = useRef(fromAskAI);
   useEffect(() => {
-    loadPrefs().then((p) => {
-      setDraft(p);
-    });
+    return () => {
+      if (fromAskAIRef.current) openAskAI();
+    };
   }, []);
 
-  const handleTestKey = async () => {
-    const keyToTest = draft.apiKey.trim();
-    if (!keyToTest) return;
-    setTestingKey(true);
-    setTestResult(null);
-    const result = await testGeminiApiKey(keyToTest);
-    setTestResult(result);
-    setTestingKey(false);
+  const [draft, setDraft] = useState<TeacherPrefs>(getCachedPrefs() || DEFAULT_PREFS);
+  const [settings, setSettings] = useState<AiTeacherSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ ok: boolean; message: string } | null>(null);
+  const [savedSuccess, setSavedSuccess] = useState(false);
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [newLabel, setNewLabel] = useState('');
+  const [newKey, setNewKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editKey, setEditKey] = useState('');
+
+  const [guideModalOpen, setGuideModalOpen] = useState(false);
+
+  const keys: AiTeacherKey[] = settings?.keys ?? [];
+  const maxKeys = settings?.maxKeys ?? 10;
+  // The plan as the server answered it. 'inactive' only when the server said false; offline or no plan field is 'unknown'.
+  const planState: PlanState = offline
+    ? 'unknown'
+    : !settings
+      ? 'loading'
+      : resolvePlanState({ serverActive: settings.plan?.active });
+  // Key controls show when the plan is active, or when it was active the last time the server said so and we are offline.
+  const planActive = planState === 'active' || (planState === 'unknown' && settings?.plan?.active === true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const s = await getAiTeacherSettings();
+      setSettings(s);
+      setDraft(s.prefs);
+      setOffline(false);
+    } catch (err: any) {
+      // Offline or server down: keep the cached persona prefs and say the keys cannot be changed right now.
+      setOffline(true);
+      setNotice({ ok: false, message: errorMessage(err) });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPrefs().then((p) => setDraft(p));
+    void load();
+  }, [load]);
+
+  // The server said no Plus plan: skip settings and show the full-screen purchase page first.
+  // Only a server answer of false redirects; offline or an unknown plan never does.
+  useEffect(() => {
+    if (planState === 'inactive') {
+      // Replacing this screen must not reopen Ask AI on unmount.
+      fromAskAIRef.current = false;
+      navigation.replace('AITeacherPlus', { fromAskAI });
+    }
+  }, [planState, navigation, fromAskAI]);
+
+  /** Runs one key action; on success the returned settings replace the key list. Returns null on failure. */
+  const runKeyAction = async (
+    busyKey: string,
+    action: () => Promise<AiTeacherSettings>,
+    okMessage?: string,
+  ): Promise<AiTeacherSettings | null> => {
+    setBusy(busyKey);
+    setNotice(null);
+    try {
+      const s = await action();
+      setSettings(s);
+      setOffline(false);
+      if (okMessage) setNotice({ ok: true, message: okMessage });
+      return s;
+    } catch (err: any) {
+      setNotice({ ok: false, message: errorMessage(err) });
+      return null;
+    } finally {
+      setBusy(null);
+    }
   };
 
-  const handleSaveKey = async () => {
-    const cleanKey = draft.apiKey.trim();
-    if (!cleanKey) return;
-    setSavingKey(true);
-    // Save just the key + mode onto whatever is already persisted, so this button
-    // doesn't silently also commit other unsaved edits elsewhere on this screen.
-    const current = await loadPrefs();
-    const updated: TeacherPrefs = { ...current, apiKey: cleanKey, apiMode: draft.apiMode };
-    await savePrefs(updated);
-    setDraft((prev) => ({ ...prev, apiKey: updated.apiKey, apiMode: updated.apiMode }));
-    setSavingKey(false);
-    setKeySaved(true);
-    setTimeout(() => setKeySaved(false), 2500);
+  const handleAddKey = async () => {
+    const apiKey = newKey.trim();
+    if (!apiKey) return;
+    const label = newLabel.trim() || `Key ${keys.length + 1}`;
+    const s = await runKeyAction('add', () => addAiTeacherKey(label, apiKey), 'Key added.');
+    if (s) {
+      setNewKey('');
+      setNewLabel('');
+      setShowAdd(false);
+      setShowKey(false);
+    }
+  };
+
+  const handleReplaceKey = async (id: string) => {
+    const apiKey = editKey.trim();
+    if (!apiKey) return;
+    const s = await runKeyAction(`replace:${id}`, () => updateAiTeacherKey(id, { apiKey }), 'Key replaced.');
+    if (s) {
+      setEditingId(null);
+      setEditKey('');
+    }
+  };
+
+  const handleTestKey = async (id: string) => {
+    const s = await runKeyAction(`test:${id}`, () => testAiTeacherKey(id));
+    if (!s) return;
+    const k = s.keys.find((x) => x.id === id);
+    if (k?.status === 'active') setNotice({ ok: true, message: `${k.label} works.` });
+    else if (k?.status === 'rate_limited') setNotice({ ok: false, message: `${k.label} is rate limited right now.` });
+    else setNotice({ ok: false, message: k?.lastError || `${k?.label ?? 'This key'} did not pass the test.` });
+  };
+
+  const handleDeleteKey = (k: AiTeacherKey) => {
+    Alert.alert('Delete this key?', `"${k.label}" will be removed from your account and the web app.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          void runKeyAction(`delete:${k.id}`, () => deleteAiTeacherKey(k.id), 'Key deleted.');
+        },
+      },
+    ]);
+  };
+
+  const handleMoveKey = (index: number, dir: -1 | 1) => {
+    const target = index + dir;
+    if (target < 0 || target >= keys.length) return;
+    const ids = keys.map((k) => k.id);
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    void runKeyAction('reorder', () => reorderAiTeacherKeys(ids));
+  };
+
+  const handleUseKey = (id: string) => {
+    void runKeyAction(`use:${id}`, () => setActiveAiTeacherKey(id), 'This key is now in use.');
   };
 
   const handleSave = async () => {
     const clean: TeacherPrefs = {
       ...draft,
-      apiKey: draft.apiKey.trim(),
-      apiMode: draft.apiMode || 'admin',
       teacherName: draft.teacherName.trim(),
       custom: draft.custom.trim(),
     };
-    await savePrefs(clean);
     setDraft(clean);
+    await savePrefs(clean);
+    try {
+      const s = await saveAiTeacherPrefs(clean);
+      setSettings(s);
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 2500);
+    } catch (err: any) {
+      setNotice({ ok: false, message: `Saved on this device only. ${errorMessage(err)}` });
+    }
+  };
+
+  const handleReset = async () => {
+    setDraft(DEFAULT_PREFS);
+    await savePrefs(DEFAULT_PREFS);
+    try {
+      const s = await saveAiTeacherPrefs(DEFAULT_PREFS);
+      setSettings(s);
+    } catch {
+      // Stays reset on this device; the server copy updates the next time it is saved.
+    }
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 2500);
   };
 
-  const handleReset = async () => {
-    await savePrefs(DEFAULT_PREFS);
-    setDraft(DEFAULT_PREFS);
-    setTestResult(null);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2500);
-  };
+  const atLimit = keys.length >= maxKeys;
+
+  // Until settings load (or the device is known to be offline), show only a loader.
+  if (!settings && !offline) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>AI Teacher Settings</Text>
+          <View style={styles.guideBtn} />
+        </View>
+        <View style={styles.centerLoader}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
@@ -112,13 +293,7 @@ export default function AITeacherSettingsScreen() {
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>AI Teacher Settings</Text>
-        <TouchableOpacity
-          style={styles.guideBtn}
-          onPress={() => {
-            setGuideTab('how-to-use');
-            setGuideModalOpen(true);
-          }}
-        >
+        <TouchableOpacity style={styles.guideBtn} onPress={() => setGuideModalOpen(true)}>
           <Ionicons name="help-circle-outline" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
@@ -128,230 +303,275 @@ export default function AITeacherSettingsScreen() {
         style={styles.scrollArea}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: spacing.xxl + insets.bottom + 20 }]}
       >
-        {/* Active Plan Card */}
-        <View style={styles.sectionCard}>
-          <View style={styles.sectionHeaderRow}>
-            <Ionicons name="sparkles" size={18} color={colors.primary} />
-            <Text style={styles.sectionTitle}>Your AI Teacher Plan</Text>
-          </View>
-          <View style={styles.planInfoBox}>
-            <View style={styles.planInfoTop}>
-              <Text style={styles.planInfoName}>
-                {hasActivePlan ? currentPlan?.name : 'No Active Plan'}
-              </Text>
-              {hasActivePlan && (
-                <View
-                  style={[
-                    styles.planBadge,
-                    isPlan1000 ? styles.planBadgePro : styles.planBadgeByok,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.planBadgeText,
-                      isPlan1000 ? styles.planBadgeTextPro : styles.planBadgeTextByok,
-                    ]}
-                  >
-                    {isPlan1000 ? 'Pro Plan (₹1,000)' : 'Plus Plan (₹500)'}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <Text style={styles.planInfoDesc}>
-              {isPlan1000
-                ? 'Your Pro Plan includes built-in SimpleLecture AI quota. You can also optionally add your own Gemini key below for higher rate limits.'
-                : isPlan500
-                ? 'Your Plus Plan uses your personal Google Gemini API key configured below.'
-                : 'Purchase a plan to unlock 1-to-1 voice and chat tutoring.'}
+        {(offline || (settings && planState === 'unknown')) && (
+          <View style={styles.offlineBanner}>
+            <Ionicons name="cloud-offline-outline" size={16} color="#92400E" />
+            <Text style={styles.offlineText}>
+              {offline
+                ? 'You are offline. Your saved preferences are shown, but keys can only be changed when you are back online.'
+                : 'Could not check your plan. Keys can only be changed once the check works.'}
             </Text>
-            <TouchableOpacity
-              style={styles.changePlanBtn}
-              onPress={() => setPlanModalOpen(true)}
-            >
-              <Text style={styles.changePlanBtnText}>
-                {hasActivePlan ? 'Change Plan' : 'Choose Plan'}
-              </Text>
+            <TouchableOpacity onPress={() => void load()} disabled={loading}>
+              <Text style={styles.offlineRetry}>Retry</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        )}
 
-        {/* Gemini API Key Section */}
+        {/* 1. Status */}
+        {settings && planActive && (
+          <View style={styles.planActiveBadge}>
+            <Ionicons name="checkmark-circle" size={14} color="#047857" />
+            <Text style={styles.planActiveText}>Plus plan active</Text>
+          </View>
+        )}
+
+        {justPurchased && (
+          <View style={styles.purchasedBanner}>
+            <Ionicons name="checkmark-circle" size={18} color="#059669" />
+            <Text style={styles.purchasedBannerText}>Payment successful. Now add your Gemini key below.</Text>
+          </View>
+        )}
+
+        {/* 2. Gemini Key Manager */}
+        {planState === 'active' && keys.length === 0 && (
+          <Text style={styles.startHint}>Add your Gemini key to start</Text>
+        )}
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeaderRow}>
             <Ionicons name="key" size={18} color="#D97706" />
-            <Text style={styles.sectionTitle}>AI Key Source & Gemini API Key</Text>
+            <Text style={styles.sectionTitle}>Your Gemini API keys</Text>
+            <Text style={styles.keyCounter}>
+              {keys.length} of {maxKeys}
+            </Text>
           </View>
-
-          {/* Mode Switch Cards */}
-          <Text style={styles.fieldLabel}>Active Key Mode</Text>
-          <View style={styles.modeCardsRow}>
-            <TouchableOpacity
-              style={[
-                styles.modeCard,
-                draft.apiMode === 'admin' && styles.modeCardActive,
-              ]}
-              onPress={() => setDraft((prev) => ({ ...prev, apiMode: 'admin' }))}
-              activeOpacity={0.8}
-            >
-              <View style={styles.modeRadioOuter}>
-                {draft.apiMode === 'admin' && <View style={styles.modeRadioInner} />}
-              </View>
-              <View style={styles.modeCardTextCol}>
-                <View style={styles.modeCardTitleRow}>
-                  <Text style={styles.modeCardTitle}>Managed Key</Text>
-                  <View style={styles.modeBadgeAdmin}>
-                    <Text style={styles.modeBadgeAdminText}>Built-in</Text>
-                  </View>
-                </View>
-                <Text style={styles.modeCardDesc}>SimpleLecture key pool</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.modeCard,
-                draft.apiMode === 'own' && styles.modeCardActive,
-              ]}
-              onPress={() => setDraft((prev) => ({ ...prev, apiMode: 'own' }))}
-              activeOpacity={0.8}
-            >
-              <View style={styles.modeRadioOuter}>
-                {draft.apiMode === 'own' && <View style={styles.modeRadioInner} />}
-              </View>
-              <View style={styles.modeCardTextCol}>
-                <View style={styles.modeCardTitleRow}>
-                  <Text style={styles.modeCardTitle}>My Own Key</Text>
-                  <View style={styles.modeBadgeOwn}>
-                    <Text style={styles.modeBadgeOwnText}>Higher Limits</Text>
-                  </View>
-                </View>
-                <Text style={styles.modeCardDesc}>Google AI Studio key</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-
-          {draft.apiMode === 'admin' ? (
-            <View style={styles.modeStatusBoxAdmin}>
-              <Ionicons name="checkmark-circle" size={16} color="#059669" />
-              <Text style={styles.modeStatusTextAdmin}>
-                Currently Active: Using SimpleLecture Managed Key.
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.modeStatusBoxOwn}>
-              <Ionicons name="sparkles" size={16} color="#D97706" />
-              <Text style={styles.modeStatusTextOwn}>
-                Currently Active: Using your personal Gemini API key.
-              </Text>
-            </View>
-          )}
-
-          <Text style={styles.fieldLabel}>
-            Personal Gemini API Key {draft.apiMode === 'admin' ? '(Stored for later)' : ''}
+          <Text style={styles.sectionHint}>
+            Add up to 10 keys. If one runs out, the next is used automatically.
           </Text>
 
-          <View style={styles.keyInputRow}>
-            <TextInput
-              style={styles.keyInput}
-              placeholder="Paste Google Gemini API Key"
-              value={draft.apiKey}
-              onChangeText={(t) => {
-                setDraft((prev) => ({ ...prev, apiKey: t }));
-                setTestResult(null);
-              }}
-              secureTextEntry={!showKey}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowKey(!showKey)}>
-              <Ionicons
-                name={showKey ? 'eye-off-outline' : 'eye-outline'}
-                size={20}
-                color={colors.textSecondary}
-              />
+          {planActive && (
+            <TouchableOpacity style={styles.linkRow} onPress={() => void Linking.openURL(GET_KEY_URL)}>
+              <Ionicons name="open-outline" size={14} color="#059669" />
+              <Text style={styles.guideLinkBtnText}>Get a free key</Text>
             </TouchableOpacity>
-          </View>
-
-          <View style={styles.keyActionsRow}>
-            <View style={styles.keyActionsLeft}>
-              <TouchableOpacity
-                style={[styles.keyActionBtn, styles.testKeyBtn]}
-                disabled={!draft.apiKey.trim() || testingKey}
-                onPress={handleTestKey}
-              >
-                {testingKey ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : (
-                  <>
-                    <Ionicons name="flash-outline" size={14} color={colors.primary} />
-                    <Text style={styles.testKeyBtnText}>Test Key</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.keyActionBtn,
-                  styles.saveKeyBtn,
-                  !draft.apiKey.trim() && styles.saveKeyBtnDisabled,
-                ]}
-                disabled={!draft.apiKey.trim() || savingKey}
-                onPress={handleSaveKey}
-              >
-                {savingKey ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Ionicons name={keySaved ? 'checkmark' : 'save-outline'} size={14} color="#FFFFFF" />
-                    <Text style={styles.saveKeyBtnText}>{keySaved ? 'Saved' : 'Save Key'}</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={styles.guideLinkBtn}
-              onPress={() => {
-                setGuideTab('api-key');
-                setGuideModalOpen(true);
-              }}
-            >
-              <Ionicons name="help-circle-outline" size={14} color="#059669" />
-              <Text style={styles.guideLinkBtnText}>How to get free key?</Text>
-            </TouchableOpacity>
-          </View>
-
-          {draft.apiMode === 'own' && !draft.apiKey.trim() && (
-            <Text style={styles.keyModeHint}>
-              Paste your key and tap "Save Key" to actually switch to it — selecting this mode alone doesn't activate it.
-            </Text>
           )}
 
-          {testResult && (
-            <View
-              style={[
-                styles.testFeedbackBox,
-                testResult.ok ? styles.testFeedbackSuccess : styles.testFeedbackError,
-              ]}
-            >
-              <Ionicons
-                name={testResult.ok ? 'checkmark-circle' : 'alert-circle'}
-                size={16}
-                color={testResult.ok ? '#059669' : '#DC2626'}
+          {loading && !settings && <ActivityIndicator style={styles.loader} color={colors.primary} />}
+
+          {!loading && keys.length === 0 && (
+            <View style={styles.emptyKeys}>
+              <Text style={styles.emptyKeysText}>
+                {planActive
+                  ? 'Add your Gemini key to start using Ask AI.'
+                  : planState === 'unknown'
+                    ? 'Your keys will show here once the plan check works.'
+                    : 'No keys saved yet. Buy Plus to add your keys.'}
+              </Text>
+            </View>
+          )}
+
+          {keys.map((k, index) => {
+            const chip = statusChip(k.status);
+            const isActive = k.id === settings?.activeKeyId;
+            const isBusy = !!busy && busy.endsWith(k.id);
+            return (
+              <View key={k.id} style={[styles.keyRow, isActive && styles.keyRowActive]}>
+                <View style={styles.keyRowTop}>
+                  <View style={styles.keyRowText}>
+                    <Text style={styles.keyLabel} numberOfLines={1}>{k.label}</Text>
+                    <Text style={styles.keyMasked}>{k.masked}</Text>
+                  </View>
+                  {planActive && (
+                  <View style={styles.reorderCol}>
+                    <TouchableOpacity
+                      onPress={() => handleMoveKey(index, -1)}
+                      disabled={index === 0 || !!busy}
+                      style={[styles.arrowBtn, (index === 0 || !!busy) && styles.disabledBtn]}
+                      accessibilityLabel="Move key up"
+                    >
+                      <Ionicons name="chevron-up" size={18} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => handleMoveKey(index, 1)}
+                      disabled={index === keys.length - 1 || !!busy}
+                      style={[styles.arrowBtn, (index === keys.length - 1 || !!busy) && styles.disabledBtn]}
+                      accessibilityLabel="Move key down"
+                    >
+                      <Ionicons name="chevron-down" size={18} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  </View>
+                  )}
+                </View>
+
+                <View style={styles.chipRow}>
+                  <View style={[styles.chip, { backgroundColor: chip.bg }]}>
+                    <Text style={[styles.chipText, { color: chip.fg }]}>{chip.label}</Text>
+                  </View>
+                  {isActive && (
+                    <View style={styles.inUseBadge}>
+                      <Text style={styles.inUseText}>In use</Text>
+                    </View>
+                  )}
+                  {isBusy && <ActivityIndicator size="small" color={colors.primary} />}
+                </View>
+
+                {!!k.lastError && (
+                  <Text style={styles.keyErrorText}>
+                    Last error: {k.lastError}
+                  </Text>
+                )}
+
+                {editingId === k.id ? (
+                  <View style={styles.editBox}>
+                    <View style={styles.keyInputRow}>
+                      <TextInput
+                        style={styles.keyInput}
+                        placeholder="Paste the new Gemini key"
+                        value={editKey}
+                        onChangeText={setEditKey}
+                        secureTextEntry={!showKey}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                      />
+                      <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowKey(!showKey)}>
+                        <Ionicons name={showKey ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
+                      </TouchableOpacity>
+                    </View>
+                    <View style={styles.keyActionsLeft}>
+                      <TouchableOpacity
+                        style={[styles.keyActionBtn, styles.saveKeyBtn, !editKey.trim() && styles.saveKeyBtnDisabled]}
+                        disabled={!editKey.trim() || !!busy}
+                        onPress={() => void handleReplaceKey(k.id)}
+                      >
+                        <Text style={styles.saveKeyBtnText}>Save key</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.keyActionBtn, styles.testKeyBtn]}
+                        onPress={() => {
+                          setEditingId(null);
+                          setEditKey('');
+                        }}
+                      >
+                        <Text style={styles.testKeyBtnText}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : planActive ? (
+                  <View style={styles.keyActionsWrap}>
+                    <TouchableOpacity
+                      style={[styles.keyActionBtn, styles.testKeyBtn, !!busy && styles.disabledBtn]}
+                      disabled={!!busy || offline}
+                      onPress={() => {
+                        setEditKey('');
+                        setShowKey(false);
+                        setEditingId(k.id);
+                      }}
+                    >
+                      <Text style={styles.testKeyBtnText}>Replace</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.keyActionBtn, styles.testKeyBtn, !!busy && styles.disabledBtn]}
+                      disabled={!!busy || offline}
+                      onPress={() => void handleTestKey(k.id)}
+                    >
+                      <Text style={styles.testKeyBtnText}>Test</Text>
+                    </TouchableOpacity>
+                    {!isActive && (
+                      <TouchableOpacity
+                        style={[styles.keyActionBtn, styles.testKeyBtn, !!busy && styles.disabledBtn]}
+                        disabled={!!busy || offline}
+                        onPress={() => handleUseKey(k.id)}
+                      >
+                        <Text style={styles.testKeyBtnText}>Use this key</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      style={[styles.keyActionBtn, styles.deleteKeyBtn, !!busy && styles.disabledBtn]}
+                      disabled={!!busy || offline}
+                      onPress={() => handleDeleteKey(k)}
+                    >
+                      <Text style={styles.deleteKeyBtnText}>Delete</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
+
+          {!planActive ? null : showAdd ? (
+            <View style={styles.addBox}>
+              <TextInput
+                style={styles.textInput}
+                placeholder="Label, e.g. School Gmail"
+                value={newLabel}
+                onChangeText={setNewLabel}
+                maxLength={40}
               />
-              <Text
-                style={[
-                  styles.testFeedbackText,
-                  testResult.ok ? styles.testFeedbackTextSuccess : styles.testFeedbackTextError,
-                ]}
-              >
-                {testResult.message}
+              <View style={styles.keyInputRow}>
+                <TextInput
+                  style={styles.keyInput}
+                  placeholder="Paste Google Gemini API Key"
+                  value={newKey}
+                  onChangeText={setNewKey}
+                  secureTextEntry={!showKey}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowKey(!showKey)}>
+                  <Ionicons name={showKey ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.keyActionsLeft}>
+                <TouchableOpacity
+                  style={[styles.keyActionBtn, styles.saveKeyBtn, (!newKey.trim() || !!busy) && styles.saveKeyBtnDisabled]}
+                  disabled={!newKey.trim() || !!busy}
+                  onPress={() => void handleAddKey()}
+                >
+                  {busy === 'add' ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.saveKeyBtnText}>Save key</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.keyActionBtn, styles.testKeyBtn]}
+                  onPress={() => {
+                    setShowAdd(false);
+                    setNewKey('');
+                    setNewLabel('');
+                  }}
+                >
+                  <Text style={styles.testKeyBtnText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={[styles.addKeyBtn, (atLimit || offline) && styles.saveKeyBtnDisabled]}
+              disabled={atLimit || offline || loading}
+              onPress={() => setShowAdd(true)}
+            >
+              <Ionicons name="add" size={16} color="#FFFFFF" />
+              <Text style={styles.addKeyBtnText}>
+                {atLimit ? `Add key (limit of ${maxKeys} reached)` : 'Add key'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {notice && (
+            <View style={[styles.testFeedbackBox, notice.ok ? styles.testFeedbackSuccess : styles.testFeedbackError]}>
+              <Ionicons
+                name={notice.ok ? 'checkmark-circle' : 'alert-circle'}
+                size={16}
+                color={notice.ok ? '#059669' : '#DC2626'}
+              />
+              <Text style={[styles.testFeedbackText, notice.ok ? styles.testFeedbackTextSuccess : styles.testFeedbackTextError]}>
+                {notice.message}
               </Text>
             </View>
           )}
 
           <Text style={styles.privacyNotice}>
-            🔒 Your key is kept strictly on this device and never stored on our servers.
+            Keys are saved to your SimpleLecture account and shared with the web app. Only the last few characters are shown.
           </Text>
         </View>
 
@@ -385,22 +605,7 @@ export default function AITeacherSettingsScreen() {
           </View>
         </View>
 
-        {/* Teacher Name */}
-        <View style={styles.sectionCard}>
-          <View style={styles.sectionHeaderRow}>
-            <Ionicons name="person" size={18} color={colors.primary} />
-            <Text style={styles.sectionTitle}>Teacher's Name</Text>
-          </View>
-          <TextInput
-            style={styles.textInput}
-            placeholder="e.g. Asha Madam, Ramesh Sir"
-            value={draft.teacherName}
-            onChangeText={(t) => setDraft((prev) => ({ ...prev, teacherName: t }))}
-            maxLength={30}
-          />
-        </View>
-
-        {/* Voice Selection */}
+        {/* 4. Voice Selection */}
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeaderRow}>
             <Ionicons name="volume-medium" size={18} color={colors.primary} />
@@ -427,7 +632,7 @@ export default function AITeacherSettingsScreen() {
           </View>
         </View>
 
-        {/* Language Selection */}
+        {/* 5. Language Selection */}
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeaderRow}>
             <Ionicons name="language" size={18} color={colors.primary} />
@@ -452,7 +657,22 @@ export default function AITeacherSettingsScreen() {
           </View>
         </View>
 
-        {/* Custom Instructions */}
+        {/* 6. Teacher Name */}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeaderRow}>
+            <Ionicons name="person" size={18} color={colors.primary} />
+            <Text style={styles.sectionTitle}>Teacher's Name</Text>
+          </View>
+          <TextInput
+            style={styles.textInput}
+            placeholder="e.g. Asha Madam, Ramesh Sir"
+            value={draft.teacherName}
+            onChangeText={(t) => setDraft((prev) => ({ ...prev, teacherName: t }))}
+            maxLength={30}
+          />
+        </View>
+
+        {/* 7. Custom Instructions */}
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeaderRow}>
             <Ionicons name="create-outline" size={18} color={colors.primary} />
@@ -491,11 +711,10 @@ export default function AITeacherSettingsScreen() {
       </ScrollView>
       </KeyboardShiftView>
 
-      <AITeacherPlanModal visible={planModalOpen} onClose={() => setPlanModalOpen(false)} />
       <AITeacherGuideModal
         visible={guideModalOpen}
         onClose={() => setGuideModalOpen(false)}
-        defaultTab={guideTab}
+        defaultTab="how-to-use"
       />
     </View>
   );
@@ -535,11 +754,49 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingBottom: spacing.xxl,
   },
+  centerLoader: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  purchasedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#D1FAE5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    borderRadius: borderRadius.md,
+  },
+  purchasedBannerText: {
+    flex: 1,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: '#065F46',
+  },
+  planActiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: borderRadius.full,
+    marginBottom: spacing.md,
+  },
+  planActiveText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#065F46',
+  },
   sectionCard: {
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius.lg,
     padding: spacing.md,
     gap: spacing.xs + 2,
   },
@@ -549,7 +806,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sectionTitle: {
-    fontSize: fontSize.sm,
+    fontSize: fontSize.lg,
     fontWeight: '700',
     color: colors.text,
   },
@@ -558,183 +815,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginBottom: 4,
   },
-  planInfoBox: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    gap: 6,
-  },
-  planInfoTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  planInfoName: {
-    fontSize: fontSize.md,
-    fontWeight: '800',
-    color: colors.text,
-  },
-  planBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-  },
-  planBadgePro: {
-    backgroundColor: '#D1FAE5',
-  },
-  planBadgeByok: {
-    backgroundColor: '#FEF3C7',
-  },
-  planBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  planBadgeTextPro: {
-    color: '#047857',
-  },
-  planBadgeTextByok: {
-    color: '#B45309',
-  },
-  planInfoDesc: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    lineHeight: 16,
-  },
-  changePlanBtn: {
-    alignSelf: 'flex-start',
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: borderRadius.md,
-    marginTop: 4,
-  },
-  changePlanBtnText: {
-    color: colors.white,
-    fontSize: 12,
+  startHint: {
+    fontSize: fontSize.sm,
     fontWeight: '600',
-  },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: '700',
     color: colors.text,
-    marginTop: 4,
-    marginBottom: 2,
-  },
-  modeCardsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginVertical: 4,
-  },
-  modeCard: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    borderRadius: borderRadius.lg,
-    padding: 10,
-    backgroundColor: colors.surface,
-  },
-  modeCardActive: {
-    borderColor: '#059669',
-    backgroundColor: '#ECFDF5',
-  },
-  modeRadioOuter: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#059669',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 2,
-  },
-  modeRadioInner: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#059669',
-  },
-  modeCardTextCol: {
-    flex: 1,
-    gap: 2,
-  },
-  modeCardTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    flexWrap: 'wrap',
-  },
-  modeCardTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  modeBadgeAdmin: {
-    backgroundColor: '#D1FAE5',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  modeBadgeAdminText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#065F46',
-  },
-  modeBadgeOwn: {
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  modeBadgeOwnText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#92400E',
-  },
-  modeCardDesc: {
-    fontSize: 10,
-    color: colors.textSecondary,
-    lineHeight: 14,
-  },
-  modeStatusBoxAdmin: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#ECFDF5',
-    borderWidth: 1,
-    borderColor: '#A7F3D0',
-    borderRadius: borderRadius.md,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    marginVertical: 4,
-  },
-  modeStatusTextAdmin: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#065F46',
-    flex: 1,
-  },
-  modeStatusBoxOwn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#FFFBEB',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    borderRadius: borderRadius.md,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    marginVertical: 4,
-  },
-  modeStatusTextOwn: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#92400E',
-    flex: 1,
+    marginBottom: spacing.sm,
   },
   keyInputRow: {
     flexDirection: 'row',
@@ -755,14 +840,6 @@ const styles = StyleSheet.create({
   eyeBtn: {
     paddingHorizontal: spacing.sm,
   },
-  keyActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 4,
-  },
   keyActionsLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -778,11 +855,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '700',
-  },
-  keyModeHint: {
-    fontSize: 10,
-    color: '#B45309',
-    marginTop: 4,
   },
   keyActionBtn: {
     flexDirection: 'row',
@@ -800,11 +872,6 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: 11,
     fontWeight: '700',
-  },
-  guideLinkBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
   },
   guideLinkBtnText: {
     color: '#059669',
@@ -996,5 +1063,161 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     fontWeight: '700',
     color: '#065F46',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: borderRadius.md,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  offlineText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#92400E',
+  },
+  offlineRetry: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+  keyCounter: {
+    marginLeft: 'auto',
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+  },
+  loader: {
+    marginVertical: spacing.md,
+  },
+  emptyKeys: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: borderRadius.md,
+    padding: spacing.sm,
+  },
+  emptyKeysText: {
+    fontSize: 11,
+    color: '#92400E',
+    fontWeight: '600',
+  },
+  keyRow: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+    padding: spacing.sm,
+    gap: 6,
+    backgroundColor: colors.surface,
+  },
+  keyRowActive: {
+    borderColor: '#059669',
+    backgroundColor: '#ECFDF5',
+  },
+  keyRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  keyRowText: {
+    flex: 1,
+    gap: 2,
+  },
+  keyLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  keyMasked: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontFamily: 'monospace',
+  },
+  reorderCol: {
+    flexDirection: 'column',
+  },
+  arrowBtn: {
+    padding: 2,
+  },
+  disabledBtn: {
+    opacity: 0.4,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  chip: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  chipText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  inUseBadge: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  inUseText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  keyErrorText: {
+    fontSize: 10,
+    color: '#B91C1C',
+    lineHeight: 14,
+  },
+  keyActionsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  deleteKeyBtn: {
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  deleteKeyBtnText: {
+    color: '#B91C1C',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  editBox: {
+    gap: 8,
+  },
+  addBox: {
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+    padding: spacing.sm,
+    backgroundColor: colors.surface,
+  },
+  addKeyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.md,
+    paddingVertical: 10,
+  },
+  addKeyBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

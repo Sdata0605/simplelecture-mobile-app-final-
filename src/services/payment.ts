@@ -1,5 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getValidAccessToken } from './supabase';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
+
+const PAYMENT_TIMEOUT_MS = 15000;
 
 const SUPABASE_URL = 'https://oxwhqvsoelqqsblmqkxx.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94d2hxdnNvZWxxcXNibG1xa3h4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk1MTU4NTgsImV4cCI6MjA3NTA5MTg1OH0.nZbWSb9AQK5uGAQmc7zXAceTHm9GRQJvqkg4-LNo_DM';
@@ -46,6 +49,8 @@ export interface PaymentVerificationResult {
   verified: boolean;
   message?: string;
   error?: string;
+  /** True when the verify request never got a usable answer (timeout, offline, bad response). */
+  networkError?: boolean;
 }
 
 export interface RazorpayPaymentData {
@@ -126,7 +131,7 @@ export const paymentService = {
         payload.promoCode = promoCode;
       }
 
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${EDGE_FUNCTIONS_BASE_URL}/create-payment-order`,
         {
           method: 'POST',
@@ -136,7 +141,8 @@ export const paymentService = {
             'Authorization': `Bearer ${authToken}`,
           },
           body: JSON.stringify(payload),
-        }
+        },
+        PAYMENT_TIMEOUT_MS,
       );
 
       if (response.status === 404) {
@@ -168,7 +174,7 @@ export const paymentService = {
         return { verified: false, error: 'User not authenticated' };
       }
 
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${EDGE_FUNCTIONS_BASE_URL}/verify-payment`,
         {
           method: 'POST',
@@ -185,14 +191,15 @@ export const paymentService = {
             userId,
             courses,
           }),
-        }
+        },
+        PAYMENT_TIMEOUT_MS,
       );
 
       const data = await response.json();
       return data;
     } catch (error) {
       console.error('Error verifying payment:', error);
-      return { verified: false, error: 'Payment verification failed' };
+      return { verified: false, error: 'Payment verification failed', networkError: true };
     }
   },
 

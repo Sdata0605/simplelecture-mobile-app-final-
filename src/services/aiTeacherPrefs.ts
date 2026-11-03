@@ -2,8 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface TeacherPrefs {
-  apiKey: string;
-  apiMode: 'admin' | 'own';
   voice: string;
   teacherName: string;
   preset: string;
@@ -12,8 +10,6 @@ export interface TeacherPrefs {
 }
 
 export const DEFAULT_PREFS: TeacherPrefs = {
-  apiKey: '',
-  apiMode: 'admin',
   voice: 'Aoede',
   teacherName: 'AI Teacher',
   preset: 'friendly',
@@ -51,7 +47,11 @@ export const LANGUAGE_OPTIONS = [
   { id: 'kn', label: 'ಕನ್ನಡ (Kanglish: Kannada + English)' },
 ];
 
-export const STORAGE_KEY = '@aiteacher_prefs_v1';
+export const STORAGE_KEY = 'aiteacher.prefs.v2';
+
+// The v1 cache held the student's raw Gemini key. Keys now live on the server (see aiTeacherKeys.ts), so the old
+// entry is dropped on load and no key is ever kept in AsyncStorage again.
+const LEGACY_STORAGE_KEY = '@aiteacher_prefs_v1';
 
 let cachedPrefs: TeacherPrefs = { ...DEFAULT_PREFS };
 let prefsLoaded = false;
@@ -69,9 +69,13 @@ const notifyListeners = () => {
 
 export async function loadPrefs(): Promise<TeacherPrefs> {
   try {
+    await AsyncStorage.removeItem(LEGACY_STORAGE_KEY).catch(() => undefined);
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (raw) {
-      cachedPrefs = { ...DEFAULT_PREFS, ...JSON.parse(raw) };
+      const parsed = JSON.parse(raw) || {};
+      // Strip any stale key fields that an older build may have written into the v2 entry.
+      const { apiKey: _apiKey, apiMode: _apiMode, ...rest } = parsed;
+      cachedPrefs = { ...DEFAULT_PREFS, ...rest };
       prefsLoaded = true;
       return cachedPrefs;
     }

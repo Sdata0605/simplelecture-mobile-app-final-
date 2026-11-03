@@ -24,8 +24,6 @@ describe('aiTeacherPrefs Service', () => {
   describe('Constants and Option Definitions', () => {
     it('has standard default preferences', () => {
       expect(DEFAULT_PREFS).toEqual({
-        apiKey: '',
-        apiMode: 'admin',
         voice: 'Aoede',
         teacherName: 'AI Teacher',
         preset: 'friendly',
@@ -75,8 +73,6 @@ describe('aiTeacherPrefs Service', () => {
 
     it('persists preferences to AsyncStorage and updates cache', async () => {
       const newPrefs: TeacherPrefs = {
-        apiKey: 'AIzaSyTest1234567890',
-        apiMode: 'own',
         voice: 'Puck',
         teacherName: 'Prof. Sharma',
         preset: 'coach',
@@ -106,13 +102,13 @@ describe('aiTeacherPrefs Service', () => {
       });
 
       const prefs = await loadPrefs();
-      expect(prefs.apiKey).toBe('test-key-abc');
+      // Keys are never kept on the device any more.
+      expect((prefs as unknown as Record<string, unknown>).apiKey).toBeUndefined();
       expect(prefs.teacherName).toBe('Tutor X');
       // Should fall back to defaults for missing fields:
       expect(prefs.voice).toBe(DEFAULT_PREFS.voice);
       expect(prefs.preset).toBe(DEFAULT_PREFS.preset);
       expect(prefs.language).toBe(DEFAULT_PREFS.language);
-      expect(prefs.apiMode).toBe(DEFAULT_PREFS.apiMode);
     });
 
     it('gracefully falls back to DEFAULT_PREFS if stored JSON is corrupted', async () => {
@@ -125,8 +121,6 @@ describe('aiTeacherPrefs Service', () => {
   describe('personaPayload', () => {
     it('formats teacher preferences correctly for the AI edge function', () => {
       const testPrefs: TeacherPrefs = {
-        apiKey: 'dummy-key',
-        apiMode: 'own',
         voice: 'Fenrir',
         teacherName: 'Mentor Ananya',
         preset: 'fun',
@@ -147,8 +141,6 @@ describe('aiTeacherPrefs Service', () => {
 
     it('handles empty voice by providing undefined', () => {
       const testPrefs: TeacherPrefs = {
-        apiKey: '',
-        apiMode: 'admin',
         voice: '',
         teacherName: 'AI Teacher',
         preset: 'friendly',

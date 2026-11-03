@@ -25,7 +25,44 @@ export interface RazorpayResult {
   error?: string;
 }
 
+// True while a checkout sheet is open; prevents a second sheet from opening on top of the first.
+let checkoutInFlight = false;
+
 export async function openRazorpayCheckout(options: RazorpayOptions): Promise<RazorpayResult> {
+  // The native module is missing in builds that predate the Razorpay native code.
+  if (!RazorpayCheckout || typeof (RazorpayCheckout as any).open !== 'function') {
+    return {
+      success: false,
+      cancelled: false,
+      error: 'Payment is not available in this version of the app. Please update the app.',
+    };
+  }
+
+  if (!options.razorpayKeyId || !options.razorpayOrderId) {
+    return {
+      success: false,
+      cancelled: false,
+      error: 'We could not start the payment. Please try again in a minute.',
+    };
+  }
+
+  if (checkoutInFlight) {
+    return {
+      success: false,
+      cancelled: false,
+      error: 'A payment is already in progress. Please wait for it to finish.',
+    };
+  }
+
+  checkoutInFlight = true;
+  try {
+    return await runCheckout(options);
+  } finally {
+    checkoutInFlight = false;
+  }
+}
+
+async function runCheckout(options: RazorpayOptions): Promise<RazorpayResult> {
   const razorpayOptions: Record<string, any> = {
     key: options.razorpayKeyId,
     amount: String(options.amountInPaise),

@@ -246,6 +246,7 @@ export function SessionEditSheet({
                   value={draft.channel}
                   onChange={c => update({ channel: c })}
                   recommended={planDefault ?? undefined}
+                  allowed={reminderSupport.channels}
                   disabled={saving}
                 />
               </View>

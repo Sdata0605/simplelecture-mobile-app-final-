@@ -76,9 +76,9 @@ function AskAIScreen({ request }: { request: AskAIRequest }) {
     };
   }, []);
 
-  const goTo = useCallback((screen: 'AITeacher' | 'AITeacherSettings') => {
+  const goTo = useCallback((screen: 'AITeacher' | 'AITeacherSettings', params?: { fromAskAI: boolean }) => {
     closeAskAI();
-    (navigationRef.current?.navigate as ((...args: any[]) => void) | undefined)?.(screen);
+    (navigationRef.current?.navigate as ((...args: any[]) => void) | undefined)?.(screen, params);
   }, []);
 
   return (
@@ -94,8 +94,7 @@ function AskAIScreen({ request }: { request: AskAIRequest }) {
         unknown: choice?.kind === 'pick' ? choice.unknown : null,
         onRetry: () => void refetch(),
       }}
-      onOpenPlans={() => goTo('AITeacher')}
-      onOpenSettings={() => goTo('AITeacherSettings')}
+      onOpenSettings={() => goTo('AITeacherSettings', { fromAskAI: true })}
     />
   );
 }

@@ -36,16 +36,12 @@ describe('LiveTeacherClient & Gemini Audio Processing', () => {
 
     client = new LiveTeacherClient({
       prefs: {
-        apiKey: '',
-        apiMode: 'admin',
         voice: 'Aoede',
         teacherName: 'Test AI Teacher',
         preset: 'friendly',
         custom: '',
         language: 'auto',
       },
-      isByok: false,
-      apiKey: '',
       callbacks: mockCallbacks,
     });
   });

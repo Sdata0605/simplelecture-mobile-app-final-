@@ -486,6 +486,7 @@ export default function StudyTimetableScreen() {
         visible={channelSession !== null}
         session={channelSession}
         planDefault={channelSession ? planDefaultFor(channelSession) : null}
+        allowed={reminderSupport.channels}
         onClose={() => setChannelSession(null)}
         onSaved={() => { setChannelSession(null); sessionsQuery.refetch(); }}
       />

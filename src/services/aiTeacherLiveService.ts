@@ -4,6 +4,10 @@ import { createEchoGate, ECHO_TAIL_MS } from './askAssistant/echoGate';
 import { createStepPacer, waitUntilIdle } from './askAssistant/stepPacing';
 import { teacherVoice, type PcmPlayer } from './teacherVoice';
 import { KEEP_LANGUAGE } from './aiTeacherVoice';
+import { reportAiTeacherKeyFailure } from './aiTeacherKeys';
+
+// A Gemini error text that means the student's current key is out of quota, rate limited or not accepted.
+const KEY_FAILURE_RE = /quota|resource.?exhausted|rate.?limit|429|api[ _]?key[ _]?(not valid|invalid)|invalid api key/i;
 
 export type LiveStatus = 'idle' | 'connecting' | 'live' | 'ended' | 'error';
 
@@ -39,7 +43,8 @@ export type TranscriptItem =
 
 export interface LiveSessionData {
   token?: string;
-  byok?: boolean;
+  /** Id of the student's Gemini key this session runs on (used to report a quota or invalid-key failure). */
+  keyId?: string;
   apiVersion: string;
   lockLevel?: string;
   model: string;
@@ -113,8 +118,11 @@ export class LiveTeacherClient {
   private muted: boolean = false;
   private callbacks: LiveCallbacks;
   private prefs: TeacherPrefs;
-  private isByok: boolean;
-  private apiKey: string;
+  private currentKeyId: string | null = null;
+  private keyFailure: string | null = null;
+  private keyRetriesLeft: number | null = null;
+  private firstMessage: string | undefined;
+  private disconnected: boolean = false;
 
   // The teacher's speech goes to the player chunk by chunk as it arrives; the player plays the chunks back to back
   // (see teacherVoice.ts), so there is nothing here to buffer, convert or write to disk.
@@ -154,8 +162,6 @@ export class LiveTeacherClient {
 
   constructor(opts: {
     prefs: TeacherPrefs;
-    isByok: boolean;
-    apiKey: string;
     callbacks: LiveCallbacks;
     /** On speakers: keep the mic closed while the teacher talks, and let the student break in with interrupt(). */
     echoGuard?: boolean;
@@ -170,8 +176,6 @@ export class LiveTeacherClient {
   }) {
     this.player = opts.player ?? teacherVoice;
     this.prefs = opts.prefs;
-    this.isByok = opts.isByok;
-    this.apiKey = opts.apiKey;
     this.callbacks = opts.callbacks;
     this.echoGuard = !!opts.echoGuard;
     this.keepGoing = !!opts.keepGoing;
@@ -251,12 +255,14 @@ export class LiveTeacherClient {
     this.callbacks.onError('');
     this.callbacks.onNotice(null);
     this.listenToPlayer();
+    this.firstMessage = firstMessage;
+    this.keyFailure = null;
+    this.disconnected = false;
 
     try {
       // 1. Fetch live session config and token from SimpleLecture backend
       const sessionData = await teacherApi<LiveSessionData>('session', {
         persona: personaPayload(this.prefs),
-        byok: this.isByok,
         isTesting: true,
         ...(this.enrolledSubjects ? { enrolledSubjects: this.enrolledSubjects } : {}),
       });
@@ -264,7 +270,9 @@ export class LiveTeacherClient {
       const isConstrained = sessionData.token?.startsWith('auth_tokens/');
       const method = isConstrained ? 'BidiGenerateContentConstrained' : 'BidiGenerateContent';
       const param = isConstrained ? 'access_token' : 'key';
-      const authKey = this.isByok ? this.apiKey.trim() : (sessionData.token || this.apiKey.trim());
+      const authKey = sessionData.token || '';
+      if (!authKey) throw new Error('Could not start voice session. Please try again.');
+      this.currentKeyId = sessionData.keyId ?? null;
       const apiVersion = sessionData.apiVersion || 'v1alpha';
 
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${apiVersion}.GenerativeService.${method}?${param}=${encodeURIComponent(authKey)}`;
@@ -381,6 +389,11 @@ export class LiveTeacherClient {
             await this.handleToolCalls(msg.toolCall.functionCalls, sessionData.catalog || []);
           }
 
+          if (msg.error && !msg.setupComplete) {
+            const text = typeof msg.error === 'string' ? msg.error : String(msg.error?.message ?? JSON.stringify(msg.error));
+            if (KEY_FAILURE_RE.test(text)) this.keyFailure = text;
+          }
+
           if (msg.goAway) {
             this.callbacks.onNotice('This class session is about to end. You can start a new class anytime.');
           }
@@ -394,9 +407,12 @@ export class LiveTeacherClient {
         this.callbacks.onError('Voice connection issue. Reconnecting...');
       };
 
-      ws.onclose = (ev: WebSocketCloseEvent) => {
+      ws.onclose = async (ev: WebSocketCloseEvent) => {
         const wasLive = this.status === 'live';
+        const failure = this.keyFailure ?? (KEY_FAILURE_RE.test(String(ev?.reason ?? '')) ? String(ev.reason) : null);
+        this.keyFailure = null;
         this.cleanup();
+        if (failure && !this.disconnected && (await this.switchToNextKey(failure))) return;
         if (!wasLive && this.status === 'connecting') {
           this.setStatus('error');
           this.callbacks.onError('Could not connect to AI Teacher. Please check your network.');
@@ -855,7 +871,28 @@ export class LiveTeacherClient {
     }
   }
 
+  /**
+   * The student's current key failed (quota, rate limit or not accepted): report it, then reconnect on the next key.
+   * Tries at most as many times as the student has keys. Returns false when there is nothing left to try.
+   */
+  private async switchToNextKey(error: string): Promise<boolean> {
+    if (!this.currentKeyId) return false;
+    try {
+      const settings = await reportAiTeacherKeyFailure(this.currentKeyId, error);
+      if (this.keyRetriesLeft === null) this.keyRetriesLeft = settings.keys.length;
+      if (this.keyRetriesLeft <= 0) return false;
+      this.keyRetriesLeft--;
+    } catch {
+      return false;
+    }
+    this.sessionHandle = null;
+    this.callbacks.onNotice('Switching to your next Gemini key...');
+    await this.connect(this.firstMessage);
+    return true;
+  }
+
   public disconnect() {
+    this.disconnected = true;
     this.stopSpeaking();
     this.cleanup();
     this.setStatus('ended');

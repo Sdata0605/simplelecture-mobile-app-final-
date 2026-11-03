@@ -16,7 +16,7 @@ import { KeyboardShiftView } from '../components/keyboard/keyboardStick';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   ExpoSpeechRecognitionModule,
@@ -31,10 +31,11 @@ import { supabase } from '../services/supabase';
 import {
   useAITeacherSubscription,
   AI_TEACHER_PLANS,
-  AITeacherPlanId,
   isPermanentTestingAccount,
 } from '../services/aiTeacherSubscription';
 import { useTeacherPrefs } from '../services/aiTeacherPrefs';
+import { getAiTeacherSettings } from '../services/aiTeacherKeys';
+import { useAiTeacherPlan } from '../services/aiTeacherPlan';
 import {
   getSubjects,
   sendChatMessage,
@@ -55,7 +56,6 @@ import {
   LiveUnderstandCard,
   LiveBigQuestionCard,
 } from '../components/aiteacher/LiveCards';
-import { AITeacherPlanModal } from '../components/aiteacher/AITeacherPlanModal';
 import { AITeacherGuideModal } from '../components/aiteacher/AITeacherGuideModal';
 import { MicStreamer } from '../components/aiteacher/MicStreamer';
 import { TeacherVoicePlayer } from '../components/aiteacher/TeacherVoicePlayer';
@@ -91,20 +91,24 @@ export default function AITeacherScreen() {
   const route = useRoute<AITeacherRouteProp>();
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const {
-    hasActivePlan,
-    isPlan500,
-    isPlan1000,
     currentPlan,
     plans,
     isVerifying,
     refreshSubscription,
   } = useAITeacherSubscription();
-  const [prefs, updatePrefs] = useTeacherPrefs();
+  // The server's answer on the Plus plan. Only 'active' opens the teacher; 'loading' and 'unknown' show a
+  // spinner or retry, and only 'inactive' shows the purchase page.
+  const { state: planState, refresh: refreshPlan } = useAiTeacherPlan(!!isAuthenticated);
+  const hasActivePlan = planState === 'active';
+  useFocusEffect(
+    useCallback(() => {
+      refreshPlan();
+    }, [refreshPlan]),
+  );
+  const [prefs] = useTeacherPrefs();
 
   // Navigation & Modals
   const [mode, setMode] = useState<'voice' | 'chat'>('voice');
-  const [planModalOpen, setPlanModalOpen] = useState(false);
-  const [selectedPlanForModal, setSelectedPlanForModal] = useState<AITeacherPlanId>('admin_1000');
   const [guideModalOpen, setGuideModalOpen] = useState(false);
   const [guideTab, setGuideTab] = useState<'how-to-use' | 'api-key'>('how-to-use');
 
@@ -124,14 +128,28 @@ export default function AITeacherScreen() {
       ? activeEnrolledSubjects.map((s) => s.name).join(', ')
       : 'Mathematics, Science, Social Science, English, Kannada';
 
-  // Pro Plan custom API key: Pro Plan users who switch "Active Key Mode" to "My Own Key"
-  // (and have saved one) use BYOK for higher rate limits; otherwise they stay on the
-  // admin-managed key even if a personal key is saved, respecting their chosen mode.
-  const useByok = isPlan500 || (isPlan1000 && prefs.apiMode === 'own' && !!prefs.apiKey?.trim());
-
-  // BYOK quick key state
-  const [quickKeyInput, setQuickKeyInput] = useState('');
-  const [quickKeySaved, setQuickKeySaved] = useState(false);
+  // Student-owned Gemini keys live on the server. null = not checked yet, 0 = none saved.
+  const [aiKeyCount, setAiKeyCount] = useState<number | null>(null);
+  // Server-side Plus plan (Rs 500). Plan first, then keys. false = not bought; null = not checked.
+  const [aiPlanActive, setAiPlanActive] = useState<boolean | null>(null);
+  const aiNeedsPlan = aiPlanActive === false;
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAuthenticated || !hasActivePlan) return undefined;
+      let cancelled = false;
+      getAiTeacherSettings()
+        .then((s) => {
+          if (!cancelled) {
+            setAiPlanActive(!!s.plan?.active);
+            setAiKeyCount(s.keys?.length ?? 0);
+          }
+        })
+        .catch((err) => console.warn('[AITeacherScreen] Key check failed:', err));
+      return () => {
+        cancelled = true;
+      };
+    }, [isAuthenticated, hasActivePlan])
+  );
 
   // ==================== LIVE WEBSOCKET TEACHER STATE ====================
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('idle');
@@ -357,12 +375,24 @@ export default function AITeacherScreen() {
     if (!hasActivePlan) return;
     if (isConnectingRef.current) return;
 
-    if (isPlan500 && !prefs.apiKey.trim()) {
+    if (aiNeedsPlan) {
+      Alert.alert(
+        'AI Teacher Plus Required',
+        'Buy AI Teacher Plus (Rs 500) in AI Teacher settings to start your 1-to-1 voice class.',
+        [
+          { text: 'Open Settings', onPress: () => navigation.navigate('AITeacherSettings') },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+      return;
+    }
+
+    if (aiKeyCount === 0) {
       Alert.alert(
         'Gemini API Key Required',
-        'Your Plus Plan requires a Google Gemini API key. Please add it first to start your 1-to-1 voice class.',
+        'Add your Gemini API key in AI Teacher settings to start your 1-to-1 voice class.',
         [
-          { text: 'Set Key', onPress: () => { setGuideTab('api-key'); setGuideModalOpen(true); } },
+          { text: 'Open Settings', onPress: () => navigation.navigate('AITeacherSettings') },
           { text: 'Cancel', style: 'cancel' },
         ]
       );
@@ -389,8 +419,6 @@ export default function AITeacherScreen() {
 
       const client = new LiveTeacherClient({
         prefs,
-        isByok: useByok,
-        apiKey: prefs.apiKey,
         callbacks: {
           onStatusChange: (s) => setLiveStatus(s),
           onSpeakingChange: (spk) => {
@@ -424,7 +452,7 @@ export default function AITeacherScreen() {
     } finally {
       isConnectingRef.current = false;
     }
-  }, [hasActivePlan, isPlan500, useByok, prefs]);
+  }, [hasActivePlan, aiKeyCount, aiNeedsPlan, navigation, prefs]);
 
   const handleAudioChunk = useCallback((pcmBase64: string, rms: number) => {
     if (liveClientRef.current) {
@@ -449,14 +477,23 @@ export default function AITeacherScreen() {
 
   // AUTO-CONNECT: When user enters the screen, start the live session once so AI teacher speaks immediately!
   useEffect(() => {
-    if (hasActivePlan && mode === 'voice' && !hasAutoConnectedRef.current && liveStatus === 'idle') {
+    // Only auto-connect once we know the student has at least one key saved.
+    if (
+      hasActivePlan &&
+      mode === 'voice' &&
+      !hasAutoConnectedRef.current &&
+      liveStatus === 'idle' &&
+      !aiNeedsPlan &&
+      aiKeyCount !== null &&
+      aiKeyCount > 0
+    ) {
       hasAutoConnectedRef.current = true;
       const timer = setTimeout(() => {
         startLiveClass();
       }, 400);
       return () => clearTimeout(timer);
     }
-  }, [hasActivePlan, mode, liveStatus, startLiveClass]);
+  }, [hasActivePlan, mode, liveStatus, startLiveClass, aiKeyCount, aiNeedsPlan]);
 
   // Teardown on unmount
   useEffect(() => {
@@ -643,6 +680,8 @@ export default function AITeacherScreen() {
   const handleSendChatMessage = async (textToSend?: string) => {
     const question = (textToSend || chatInputText).trim();
     if (!question || isSendingChat) return;
+    // No plan or no saved key: the banner at the top explains what to do.
+    if (aiNeedsPlan || aiKeyCount === 0) return;
 
     // Check 1: Greeting
     const isGreeting = /^(hi|hello|hey|namaste|namaskara|namaskar|good morning|good afternoon|good evening|vanakkam|hoi|hola)\b[!?.]*$/i.test(question);
@@ -739,8 +778,6 @@ export default function AITeacherScreen() {
         messages: history,
         mode: 'chat',
         prefs,
-        isByok: useByok,
-        apiKey: prefs.apiKey,
       });
 
       const replyText =
@@ -771,14 +808,6 @@ export default function AITeacherScreen() {
     }
   };
   handleSendChatMessageRef.current = handleSendChatMessage;
-
-  const handleSaveQuickKey = async () => {
-    if (!quickKeyInput.trim()) return;
-    await updatePrefs({ apiKey: quickKeyInput.trim() });
-    setQuickKeyInput('');
-    setQuickKeySaved(true);
-    setTimeout(() => setQuickKeySaved(false), 3000);
-  };
 
   // 1. Loading screen
   if (authLoading) {
@@ -850,8 +879,30 @@ export default function AITeacherScreen() {
     );
   }
 
-  // 3. Authenticated but no active plan: Strict requirement - Paywall screen
-  if (!hasActivePlan) {
+  // 3a. Plan not checked yet: spinner, never the purchase page.
+  if (planState === 'loading') {
+    return (
+      <View style={[styles.centerContainer, { paddingTop: insets.top }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  // 3b. Plan could not be checked (offline, server error, or no plan in the answer): retry, never the purchase page.
+  if (planState === 'unknown') {
+    return (
+      <View style={[styles.centerContainer, { paddingTop: insets.top, paddingHorizontal: spacing.lg }]}>
+        <Text style={styles.loadingText}>Could not check your plan.</Text>
+        <TouchableOpacity style={styles.verifyBtn} onPress={refreshPlan}>
+          <Ionicons name="refresh" size={16} color={colors.textSecondary} />
+          <Text style={styles.verifyBtnText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // 3c. The server said there is no Plus plan: Strict requirement - Paywall screen
+  if (planState === 'inactive') {
     return (
       <View style={[styles.paywallContainer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <View style={styles.paywallHeader}>
@@ -921,8 +972,7 @@ export default function AITeacherScreen() {
             <TouchableOpacity
               style={styles.selectPlanOutlineBtn}
               onPress={() => {
-                setSelectedPlanForModal('byok_500');
-                setPlanModalOpen(true);
+                navigation.navigate('AITeacherPlus');
               }}
             >
               <Text style={styles.selectPlanOutlineText}>Choose Plus Plan - ₹{plans.byok_500.price}</Text>
@@ -930,59 +980,14 @@ export default function AITeacherScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Plan 2: Pro Plan (₹1000) */}
-          <View style={[styles.planBox, styles.proPlanBox]}>
-            <View style={styles.proRibbon}>
-              <Ionicons name="star" size={11} color="#FFFFFF" />
-              <Text style={styles.proRibbonText}>POPULAR</Text>
-            </View>
-
-            <View style={styles.planBoxHeader}>
-              <View style={[styles.planPill, styles.proPlanPill]}>
-                <Text style={styles.proPlanPillText}>{plans.admin_1000.badge || 'Recommended'}</Text>
-              </View>
-              <View style={styles.planTag}>
-                <Ionicons name="sparkles" size={14} color="#059669" />
-                <Text style={[styles.planTagText, { color: '#059669' }]}>Zero Setup</Text>
-              </View>
-            </View>
-
-            <Text style={styles.planBoxTitle}>{plans.admin_1000.name}</Text>
-            <Text style={styles.planBoxDesc}>{plans.admin_1000.tagline}</Text>
-
-            <View style={styles.priceRow}>
-              <Text style={[styles.priceAmount, { color: '#047857' }]}>₹{plans.admin_1000.price}</Text>
-              <Text style={styles.priceLabel}>one-time access</Text>
-            </View>
-
-            <View style={styles.featureList}>
-              {plans.admin_1000.features.map((f, i) => (
-                <View key={`feat-admin-${i}`} style={styles.featureRow}>
-                  <Ionicons name="checkmark-circle" size={16} color="#047857" />
-                  <Text style={[styles.featureRowText, i === 4 && { fontWeight: '700' }]}>
-                    {f}
-                  </Text>
-                </View>
-              ))}
-            </View>
-
-            <TouchableOpacity
-              style={styles.selectPlanProBtn}
-              onPress={() => {
-                setSelectedPlanForModal('admin_1000');
-                setPlanModalOpen(true);
-              }}
-            >
-              <Text style={styles.selectPlanProText}>Unlock Pro Plan - ₹{plans.admin_1000.price}</Text>
-              <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
-
           {/* Refresh status */}
           <View style={styles.verifySection}>
             <TouchableOpacity
               style={styles.verifyBtn}
-              onPress={refreshSubscription}
+              onPress={() => {
+                void refreshSubscription();
+                refreshPlan();
+              }}
               disabled={isVerifying}
             >
               {isVerifying ? (
@@ -997,11 +1002,6 @@ export default function AITeacherScreen() {
           </View>
         </ScrollView>
 
-        <AITeacherPlanModal
-          visible={planModalOpen}
-          onClose={() => setPlanModalOpen(false)}
-          defaultPlanId={selectedPlanForModal}
-        />
         <AITeacherGuideModal
           visible={guideModalOpen}
           onClose={() => setGuideModalOpen(false)}
@@ -1031,28 +1031,13 @@ export default function AITeacherScreen() {
         <View style={styles.topTitleCol}>
           <Text style={styles.screenTitle}>AI Teacher · 1-to-1</Text>
           <TouchableOpacity
-            style={[
-              styles.planBadge,
-              isPlan1000 ? styles.planBadgePro : styles.planBadgeByok,
-            ]}
+            style={[styles.planBadge, styles.planBadgeByok]}
             onPress={() => {
-              setSelectedPlanForModal(isPlan1000 ? 'admin_1000' : 'byok_500');
-              setPlanModalOpen(true);
+              navigation.navigate('AITeacherPlus');
             }}
           >
-            <Ionicons
-              name={isPlan1000 ? 'sparkles' : 'key'}
-              size={12}
-              color={isPlan1000 ? '#047857' : '#D97706'}
-            />
-            <Text
-              style={[
-                styles.planBadgeText,
-                isPlan1000 ? styles.planBadgeTextPro : styles.planBadgeTextByok,
-              ]}
-            >
-              {isPlan1000 ? 'Pro Plan' : 'Plus Plan'}
-            </Text>
+            <Ionicons name="key" size={12} color="#D97706" />
+            <Text style={[styles.planBadgeText, styles.planBadgeTextByok]}>Plus</Text>
           </TouchableOpacity>
         </View>
 
@@ -1075,33 +1060,33 @@ export default function AITeacherScreen() {
         </View>
       </View>
 
-      {/* BYOK Warning Banner */}
-      {isPlan500 && !prefs.apiKey.trim() && (
+      {/* Plan first: no Plus plan yet. Otherwise, no saved Gemini key: point the student to AI Teacher settings */}
+      {aiNeedsPlan && (
+        <View style={styles.byokBanner}>
+          <View style={styles.byokBannerTop}>
+            <Ionicons name="sparkles" size={16} color="#047857" />
+            <Text style={styles.byokBannerTitle}>Buy AI Teacher Plus (Rs 500) to start</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.byokQuickSaveBtn}
+            onPress={() => navigation.navigate('AITeacherSettings')}
+          >
+            <Text style={styles.byokQuickSaveText}>Open AI Teacher settings</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {!aiNeedsPlan && aiKeyCount === 0 && (
         <View style={styles.byokBanner}>
           <View style={styles.byokBannerTop}>
             <Ionicons name="key" size={16} color="#D97706" />
-            <Text style={styles.byokBannerTitle}>API Key Required for Plus Plan</Text>
+            <Text style={styles.byokBannerTitle}>Add your Gemini key in AI Teacher settings to start</Text>
           </View>
-          <View style={styles.byokInputRow}>
-            <TextInput
-              style={styles.byokQuickInput}
-              placeholder="Paste Gemini API key..."
-              value={quickKeyInput}
-              onChangeText={setQuickKeyInput}
-              secureTextEntry
-              autoCapitalize="none"
-            />
-            <TouchableOpacity
-              style={styles.byokQuickSaveBtn}
-              onPress={handleSaveQuickKey}
-              disabled={!quickKeyInput.trim()}
-            >
-              <Text style={styles.byokQuickSaveText}>Save</Text>
-            </TouchableOpacity>
-          </View>
-          {quickKeySaved && (
-            <Text style={styles.byokQuickSavedText}>Key saved! Ready to learn.</Text>
-          )}
+          <TouchableOpacity
+            style={styles.byokQuickSaveBtn}
+            onPress={() => navigation.navigate('AITeacherSettings')}
+          >
+            <Text style={styles.byokQuickSaveText}>Open AI Teacher settings</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -1629,11 +1614,6 @@ export default function AITeacherScreen() {
       )}
 
       {/* Modals */}
-      <AITeacherPlanModal
-        visible={planModalOpen}
-        onClose={() => setPlanModalOpen(false)}
-        defaultPlanId={selectedPlanForModal}
-      />
       <AITeacherGuideModal
         visible={guideModalOpen}
         onClose={() => setGuideModalOpen(false)}

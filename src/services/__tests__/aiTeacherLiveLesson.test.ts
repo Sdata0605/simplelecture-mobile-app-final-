@@ -9,7 +9,7 @@ jest.mock('../aiTeacherService', () => ({
 
 const teacherApiMock = teacherApi as jest.MockedFunction<typeof teacherApi>;
 
-const prefs = { apiKey: '', apiMode: 'admin' as const, voice: 'Aoede', teacherName: 'Asha', preset: 'friendly', custom: '', language: 'auto' };
+const prefs = { voice: 'Aoede', teacherName: 'Asha', preset: 'friendly', custom: '', language: 'auto' };
 
 /** A player that only records what it is told, and lets a test say when the speech has played out. */
 function makePlayer() {
@@ -38,7 +38,7 @@ function makeClient(options: Record<string, unknown> = {}) {
     onTurnComplete: jest.fn(),
   };
   const voice = makePlayer();
-  const client = new LiveTeacherClient({ prefs, isByok: false, apiKey: '', callbacks, player: voice.player, ...options });
+  const client = new LiveTeacherClient({ prefs, callbacks, player: voice.player, ...options });
   const ws = { send: jest.fn(), close: jest.fn() };
   (client as any).ws = ws;
   (client as any).status = 'live';
@@ -310,7 +310,7 @@ describe('turn complete', () => {
       onStatusChange: jest.fn(), onSpeakingChange: jest.fn(), onTranscriptUpdate: jest.fn(),
       onError: jest.fn(), onNotice: jest.fn(), onTurnComplete: jest.fn(),
     };
-    const client = new LiveTeacherClient({ prefs, isByok: false, apiKey: '', callbacks });
+    const client = new LiveTeacherClient({ prefs, callbacks });
     await client.connect('hello');
     const ws = sockets[0];
     await ws.onmessage({ data: JSON.stringify({ setupComplete: {} }) });

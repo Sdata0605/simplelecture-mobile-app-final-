@@ -6,8 +6,10 @@
 //
 // Mounted/unmounted by the parent (V5PlayerScreen), which also rotates the screen to landscape before opening it
 // and back afterwards. Ported from the web app's src/components/learning/askAssistant.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch } from 'react';
 import {
+  ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -19,13 +21,14 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../context/AuthContext';
-import { useAITeacherSubscription } from '../../services/aiTeacherSubscription';
 import { useTeacherPrefs } from '../../services/aiTeacherPrefs';
-import { computeUseByok } from '../../services/aiTeacherScoping';
+import { useAiTeacherPlan } from '../../services/aiTeacherPlan';
+import { navigationRef } from '../../navigation/AppNavigator';
 import type { TeacherSubject } from '../../services/aiTeacherService';
 import { LiveTeacherClient, type LiveStatus, type QuizItem, type TranscriptItem } from '../../services/aiTeacherLiveService';
 import { KEEP_LANGUAGE } from '../../services/aiTeacherVoice';
@@ -39,11 +42,14 @@ import {
   withFirstQuestion,
   type LectureAskContext,
 } from '../../services/askAssistant/lectureLesson';
+import { focusReducer, panelTargets, type FocusEvent, type FocusState } from '../../services/askAssistant/presentationFocus';
 import { useAutoContinue, useTurnSinceCard } from '../../hooks/useAutoContinue';
+import { useReduceMotion } from '../../hooks/useReduceMotion';
 import { MicStreamer } from '../aiteacher/MicStreamer';
 import { TeacherVoicePlayer } from '../aiteacher/TeacherVoicePlayer';
 import { LessonBoard } from './LessonBoardNative';
 import type { CardActions } from './LessonCardsNative';
+import { PresentationFocusHeader } from './PresentationFocusHeader';
 import { RobotMascot } from './RobotMascot';
 import { SubjectPicker } from './SubjectPickerNative';
 import { ask } from './askTheme';
@@ -72,37 +78,111 @@ export interface AskAIAssistantProps {
   lectureLanguage?: string | null;
   /** Where the lecture was paused (mid-lecture only). */
   context?: LectureAskContext | null;
-  /** The student has no AI Teacher plan: take them to the plans. */
+  /** No longer used (there are no plans); kept only so V5PlayerScreen still compiles until it is updated. */
   onOpenPlans?: () => void;
-  /** Opens the teacher settings (their own API key, voice). Shown as a gear in the top bar when given. */
+  /** Opens the teacher settings (their Gemini keys, voice). Shown as a gear in the top bar when given. */
   onOpenSettings?: () => void;
 }
 
 const SERIF = Platform.select({ ios: 'Georgia', default: 'serif' });
+const AnimatedKeyboardAvoidingView = Animated.createAnimatedComponent(KeyboardAvoidingView);
+// Safety net: the "Preparing your lesson..." loader hides after this long even if the teacher never answers.
+const LESSON_LOADER_MAX_MS = 15000;
 
 
 export function AskAIAssistant(props: AskAIAssistantProps) {
-  const { onClose, topicTitle, onOpenPlans, onOpenSettings, choices } = props;
+  const { onClose, topicTitle, onOpenSettings, choices } = props;
   const insets = useSafeAreaInsets();
+  // Inside the Modal, useSafeAreaInsets() reports right = 0 on Android, so landscape falls back to a fixed inset.
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
+  const rightInset = Math.max(insets.right, isLandscape ? 48 : 0);
   const { isAuthenticated } = useAuth();
-  const { hasActivePlan } = useAITeacherSubscription();
   const [picked, setPicked] = useState<TeacherSubject | null>(null);
   const subject = props.subject ?? picked;
+
+  // Whether the teacher panel is shown over a lesson presentation (see presentationFocus.ts).
+  const [focus, dispatch] = useReducer(focusReducer, 'lesson-full');
+  const reduceMotion = useReduceMotion();
+  const subjectId = subject?.id ?? null;
+  useEffect(() => {
+    dispatch({ type: 'RESET' });
+  }, [subjectId]);
+
+  // Whether the Plus plan (Rs 500) is bought, as the server says. Only 'inactive' may show the purchase gate.
+  const { state: planState, settings: teacherSettings, refresh: refreshPlan } = useAiTeacherPlan(!!isAuthenticated);
+  // How many Gemini keys the student has saved. null until the settings have loaded (then nothing is gated).
+  const keyCount: number | null = teacherSettings ? teacherSettings.keys.length : null;
+
+  // Leaves Ask AI for the key settings; the settings screen reopens Ask AI on back (fromAskAI).
+  const openKeySettings = () => {
+    if (onOpenSettings) {
+      onOpenSettings();
+      return;
+    }
+    onClose();
+    (navigationRef.current?.navigate as ((...args: any[]) => void) | undefined)?.('AITeacherSettings', { fromAskAI: true });
+  };
+
+  // Closes Ask AI, then opens the full-screen purchase page on top; it comes back to Ask AI on back (fromAskAI).
+  const openPlan = () => {
+    onClose();
+    (navigationRef.current?.navigate as ((...args: any[]) => void) | undefined)?.('AITeacherPlus', { fromAskAI: true });
+  };
+
+  // The lesson loader: shown from the moment a subject is chosen until the teacher's lesson is ready (or 15 s).
+  const [loadingLesson, setLoadingLesson] = useState(false);
+  useEffect(() => {
+    if (subjectId) setLoadingLesson(true);
+  }, [subjectId]);
+  useEffect(() => {
+    if (!loadingLesson) return;
+    const timer = setTimeout(() => setLoadingLesson(false), LESSON_LOADER_MAX_MS);
+    return () => clearTimeout(timer);
+  }, [loadingLesson]);
+  const markLessonReady = useCallback(() => setLoadingLesson(false), []);
+  let inLesson = false;
 
   let body: React.ReactNode;
   if (!isAuthenticated) {
     body = <Gate icon="lock-closed" title="Log in to talk to your AI teacher" text="Your AI teacher answers your doubts by voice while you watch." />;
-  } else if (!hasActivePlan) {
+  } else if (planState === 'loading') {
+    body = (
+      <View style={styles.gate}>
+        <ActivityIndicator color={ask.mint} />
+      </View>
+    );
+  } else if (planState === 'unknown') {
     body = (
       <Gate
-        icon="lock-closed"
-        title="Voice doubts need an AI Teacher plan"
-        text="Talk to your AI teacher out loud and get answers from your own course notes, right in the lecture."
-        action={onOpenPlans ? { label: 'See AI Teacher plans', onPress: onOpenPlans } : undefined}
+        icon="cloud-offline-outline"
+        title="Could not check your plan."
+        text="Check your internet connection, then try again."
+        action={{ label: 'Retry', onPress: refreshPlan }}
+      />
+    );
+  } else if (planState === 'inactive') {
+    // Plan first: the Plus plan must be bought before any key can be added.
+    body = (
+      <Gate
+        icon="sparkles"
+        title="Buy AI Teacher Plus (Rs 500) to start"
+        text="Buy the Plus plan, then add up to 10 of your own free Google Gemini keys. Your teacher is ready once you do."
+        action={{ label: 'Buy AI Teacher Plus (Rs 500) to start', onPress: openPlan }}
+      />
+    );
+  } else if (keyCount === 0) {
+    body = (
+      <Gate
+        icon="key"
+        title="Add your Gemini key to start"
+        text="Ask AI uses your own free Google Gemini API key. Add one (you can add up to 10) and your teacher is ready."
+        action={{ label: 'Add your Gemini key to start', onPress: openKeySettings }}
       />
     );
   } else if (subject) {
-    body = <LiveLecture {...props} subject={subject} />;
+    inLesson = true;
+    body = <LiveLecture {...props} subject={subject} focus={focus} dispatch={dispatch} reduceMotion={reduceMotion} onReady={markLessonReady} />;
   } else {
     body = (
       <SubjectPicker
@@ -120,18 +200,20 @@ export function AskAIAssistant(props: AskAIAssistantProps) {
     <Modal
       visible
       animationType="fade"
-      statusBarTranslucent
+      statusBarTranslucent={false}
+      navigationBarTranslucent={false}
       supportedOrientations={['landscape', 'landscape-left', 'landscape-right']}
-      onRequestClose={onClose}
+      onRequestClose={() => (focus === 'presenting-with-panel' ? dispatch({ type: 'MINIMISE' }) : onClose())}
     >
       <View
         style={[
           styles.root,
           {
             paddingTop: Math.max(insets.top, 6),
-            paddingBottom: Math.max(insets.bottom, 10),
-            paddingLeft: Math.max(insets.left, 18),
-            paddingRight: Math.max(insets.right, 18),
+            paddingBottom: Math.max(insets.bottom, 8),
+            // Landscape: the Android navigation strip sits on the right edge, the notch on the left.
+            paddingLeft: Math.max(insets.left, 12),
+            paddingRight: Math.max(rightInset, 12),
           },
         ]}
       >
@@ -149,9 +231,14 @@ export function AskAIAssistant(props: AskAIAssistantProps) {
               )}
             </Text>
           </View>
+          <PresentationFocusHeader
+            visible={focus !== 'lesson-full' && !!subject}
+            onPress={() => dispatch({ type: 'OPEN_PANEL' })}
+            reduceMotion={reduceMotion}
+          />
           <View style={styles.topActions}>
             {isAuthenticated && !!onOpenSettings && (
-              <Pressable onPress={onOpenSettings} accessibilityLabel="Teacher settings: your API key, voice and teacher style" style={styles.closeBtn} hitSlop={8}>
+              <Pressable onPress={onOpenSettings} accessibilityLabel="Teacher settings: your Gemini keys, voice and teacher style" style={styles.closeBtn} hitSlop={8}>
                 <Ionicons name="settings-outline" size={18} color={ask.ink} />
               </Pressable>
             )}
@@ -161,17 +248,43 @@ export function AskAIAssistant(props: AskAIAssistantProps) {
           </View>
         </View>
         {body}
+        {inLesson && loadingLesson && (
+          <View style={styles.loader} accessibilityLabel="Preparing your lesson" accessibilityLiveRegion="polite">
+            <RobotMascot mode="idle" size={90} />
+            <ActivityIndicator size="large" color={ask.mint} />
+            <Text style={styles.loaderText}>Preparing your lesson...</Text>
+          </View>
+        )}
       </View>
     </Modal>
   );
 }
 
 /** Starts the live call as soon as it opens and shows the lesson board beside the teacher. */
-function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }: AskAIAssistantProps & { subject: TeacherSubject }) {
+function LiveLecture({
+  trigger,
+  subject,
+  topicTitle,
+  lectureLanguage,
+  context,
+  focus,
+  dispatch,
+  reduceMotion,
+  onReady,
+}: AskAIAssistantProps & {
+  subject: TeacherSubject;
+  focus: FocusState;
+  dispatch: Dispatch<FocusEvent>;
+  reduceMotion: boolean;
+  /** Called once the lesson is ready (the teacher is live, has said something, or the call ended or failed). */
+  onReady: () => void;
+}) {
   const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // Same landscape fallback as the outer component: the Modal reports right = 0 on Android.
+  const isLandscape = width > height;
+  const rightInset = Math.max(insets.right, isLandscape ? 48 : 0);
   const [prefs] = useTeacherPrefs();
-  const { isPlan500, isPlan1000 } = useAITeacherSubscription();
-  const useByok = computeUseByok(isPlan500, isPlan1000, prefs.apiKey, prefs.apiMode);
   const [opening] = useState(() =>
     buildLectureOpening({
       trigger,
@@ -212,12 +325,6 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
       setSpeaking(false);
       setTurnsCompleted(0);
 
-      if (isPlan500 && !prefs.apiKey.trim()) {
-        setError('Your Plus plan needs your own Gemini API key. Add it in the AI Teacher settings, then try again.');
-        setStatus('error');
-        return;
-      }
-
       try {
         const perm = await Audio.requestPermissionsAsync();
         setMicAvailable(perm.granted);
@@ -228,8 +335,6 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
 
       const client = new LiveTeacherClient({
         prefs,
-        isByok: useByok,
-        apiKey: prefs.apiKey,
         // Speakers: the mic is closed while the teacher talks, and the student taps the orb to break in.
         echoGuard: true,
         // A lesson in steps: explain each aloud, then carry on without being told to.
@@ -257,7 +362,7 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
       clientRef.current = client;
       await client.connect(first);
     },
-    [isPlan500, prefs, subject.id, subject.name, useByok],
+    [prefs, subject.id, subject.name],
   );
 
   // Deferred a tick so a remount cancels it instead of opening two calls.
@@ -284,6 +389,18 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
 
   const view = deriveLectureView({ status, speaking, muted, micAvailable, micLevel, teacherName: prefs.teacherName.trim() || 'AI Teacher', transcript });
   const lesson = deriveLesson(transcript);
+
+  // A presentation is on while the lesson has cards on the board.
+  const hasBoard = lesson.cards.length > 0;
+  useEffect(() => {
+    dispatch(hasBoard ? { type: 'PRESENTATION_START' } : { type: 'PRESENTATION_END' });
+  }, [hasBoard, dispatch]);
+
+  // The lesson is ready once the teacher call is up, has said something, or has ended or failed.
+  const lessonReady = status === 'live' || status === 'ended' || status === 'error' || transcript.length > 0;
+  useEffect(() => {
+    if (lessonReady) onReady();
+  }, [lessonReady, onReady]);
 
   // Backstop for the lesson flow: if the teacher still ends its turn after a step, and the student has said
   // nothing, tell it (silently) to go on, so nobody has to say "go ahead".
@@ -354,6 +471,29 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
   const micLive = view.orbMode === 'listening';
   const left = compact ? styles.textLeft : null;
 
+  // Presentation focus: the board gives up the panel's width, and the panel slides and fades away. Values are
+  // driven by shared values on the UI thread; React only sets the target when `focus` changes.
+  const targets = panelTargets(focus);
+  const dock = useSharedValue(targets.dock);
+  const panel = useSharedValue(targets.panel);
+  const scrim = useSharedValue(targets.overlay);
+  useEffect(() => {
+    const t = panelTargets(focus);
+    const dur = (ms: number) => (reduceMotion ? 0 : ms);
+    const ease = Easing.bezier(0.4, 0, 0.2, 1);
+    dock.value = withTiming(t.dock, { duration: dur(t.dock ? 260 : 240), easing: ease });
+    panel.value = withTiming(t.panel, { duration: dur(t.panel ? 260 : 220), easing: ease });
+    scrim.value = withTiming(t.overlay, { duration: dur(200), easing: ease });
+  }, [focus, reduceMotion, dock, panel, scrim]);
+  const boardStyle = useAnimatedStyle(() => ({ marginRight: dock.value * (panelWidth + 18) }), [panelWidth]);
+  const panelStyle = useAnimatedStyle(
+    () => ({ opacity: panel.value, transform: [{ translateX: (1 - panel.value) * (panelWidth + 24) }] }),
+    [panelWidth],
+  );
+  const scrimStyle = useAnimatedStyle(() => ({ opacity: scrim.value }));
+  const panelShown = targets.panel === 1;
+  const scrimShown = targets.overlay === 1;
+
   return (
     <View style={styles.stage}>
       {/* The teacher's voice plays in a hidden WebView, loaded before the first word arrives. */}
@@ -361,11 +501,35 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
       {/* Mic capture runs in a hidden WebView with the platform's echo cancellation. */}
       {status === 'live' && <MicStreamer isStreaming={!muted} isMuted={muted} onAudioChunk={(pcm, rms) => clientRef.current?.sendRealtimeAudio(pcm, rms)} onError={() => setMicAvailable(false)} />}
 
-      <View style={styles.board}>
+      <Animated.View style={[styles.board, boardStyle, { paddingBottom: insets.bottom }]}>
         <LessonBoard lesson={lesson} actions={actions} />
-      </View>
+      </Animated.View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.teacher, { width: panelWidth }]}>
+      {/* Tapping the dimmed board while the panel is over a presentation minimises the panel. */}
+      <Animated.View pointerEvents={scrimShown ? 'auto' : 'none'} style={[styles.scrim, scrimStyle]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => dispatch({ type: 'MINIMISE' })} accessibilityLabel="Hide teacher panel" />
+      </Animated.View>
+
+      <AnimatedKeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        pointerEvents={panelShown ? 'auto' : 'none'}
+        style={[styles.teacher, styles.teacherDock, { width: panelWidth, right: rightInset, paddingBottom: Math.max(insets.bottom, 8) }, panelStyle]}
+      >
+        {lesson.cards.length > 0 && (
+          <View style={styles.minimiseRow}>
+            <Pressable
+              style={styles.minimiseBtn}
+              accessibilityLabel="Minimise teacher panel"
+              onPress={() => {
+                Keyboard.dismiss();
+                dispatch({ type: 'MINIMISE' });
+              }}
+            >
+              <Ionicons name="contract-outline" size={14} color={ask.muted} />
+              <Text style={styles.minimiseText}>Minimise</Text>
+            </Pressable>
+          </View>
+        )}
         <View style={[styles.talk, compact && styles.talkCompact]}>
           <View style={[styles.orbWrap, { width: orbBox, height: orbBox }]}>
             <RobotMascot
@@ -430,7 +594,7 @@ function LiveLecture({ trigger, subject, topicTitle, lectureLanguage, context }:
             <Ionicons name="send" size={16} color={ask.onMint} />
           </Pressable>
         </View>
-      </KeyboardAvoidingView>
+      </AnimatedKeyboardAvoidingView>
     </View>
   );
 }
@@ -467,11 +631,17 @@ const styles = StyleSheet.create({
   topbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 8 },
   topActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   titleRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
-  title: { color: ask.mint, fontSize: 12, fontWeight: '800', letterSpacing: 1.6 },
+  title: { color: ask.mint, fontSize: 12, fontWeight: '800', letterSpacing: 1.6, maxWidth: '38%' },
   titleSubject: { color: ask.muted, fontWeight: '600', letterSpacing: 0.8 },
   closeBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: ask.line, backgroundColor: ask.panel },
   stage: { flex: 1, flexDirection: 'row', gap: 18, minHeight: 0 },
   board: { flex: 1, minWidth: 0 },
+  // The teacher panel floats over the right edge of the stage, so it can slide in and out over the board.
+  teacherDock: { position: 'absolute', right: 0, top: 0, bottom: 0 },
+  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(5,13,12,0.45)' },
+  minimiseRow: { flexDirection: 'row', justifyContent: 'flex-end' },
+  minimiseBtn: { height: 28, paddingHorizontal: 10, borderRadius: 14, borderWidth: 1, borderColor: ask.line, backgroundColor: ask.panel, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  minimiseText: { color: ask.muted, fontSize: 12, fontWeight: '700' },
   // The panel is a column: the orb and captions take whatever height is left, and the quick buttons and type box
   // below them are always fully visible.
   teacher: { padding: 10, gap: 8, borderRadius: 24, borderWidth: 1, borderColor: ask.line, backgroundColor: 'rgba(255, 255, 255, 0.035)' },
@@ -506,4 +676,7 @@ const styles = StyleSheet.create({
   gateText: { color: ask.muted, fontSize: 14, lineHeight: 20, textAlign: 'center', maxWidth: 420 },
   gateButton: { height: 40, paddingHorizontal: 18, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: ask.mint },
   gateButtonText: { color: ask.onMint, fontSize: 14, fontWeight: '800' },
+  // Covers the whole screen (the root's padding is not inside an absolute child), centred.
+  loader: { ...StyleSheet.absoluteFillObject, zIndex: 10, elevation: 10, backgroundColor: ask.bg, opacity: 0.96, alignItems: 'center', justifyContent: 'center', gap: 14 },
+  loaderText: { color: ask.muted, fontSize: 14 },
 });

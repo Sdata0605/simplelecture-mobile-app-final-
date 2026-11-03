@@ -14,6 +14,7 @@ import {
   CHANNEL_LABEL,
   type ReminderChoice,
 } from '../../services/timetableReminders';
+import { afterCallChannelSaved } from '../../services/sessionEdit';
 
 type IconName = 'call' | 'chatbubble-ellipses' | 'notifications' | 'mail' | 'notifications-off-outline';
 
@@ -109,6 +110,8 @@ export default function SessionChannelSheet({ visible, session, planDefault, onC
     setError(null);
     try {
       await setSessionChannel(session.id, next);
+      // Not awaited: day-one audio can take up to 30 s and must not hold the sheet open. The helper never throws.
+      if (next === 'call' && next !== current) void afterCallChannelSaved(session.timetable_id);
       onSaved(current, next);
       onClose();
     } catch {

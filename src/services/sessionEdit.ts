@@ -18,7 +18,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 /** Source row: the subset of StudyTimetableSession the editor reads. */
 export type SessionEditSource = Pick<
   StudyTimetableSession,
-  'id' | 'title' | 'scheduled_at' | 'duration_minutes' | 'status' | 'notes' | 'reminder_channel'
+  'id' | 'timetable_id' | 'title' | 'scheduled_at' | 'duration_minutes' | 'status' | 'notes' | 'reminder_channel'
 >;
 
 export interface SessionEditDraft {
@@ -237,6 +237,26 @@ export function saveErrorMessage(err: unknown): string {
   return 'Could not save. Try again.';
 }
 
+/**
+ * Call after a session's channel was saved as 'call'. Prepares the day-1 call voice on the server, then re-syncs
+ * local reminders so the call alarm gets scheduled. Never throws: the channel save has already succeeded.
+ */
+export async function afterCallChannelSaved(timetableId: string | null | undefined): Promise<void> {
+  try {
+    const [{ prepareDayOneAudio }, { syncReminders }, { FEATURES }] = await Promise.all([
+      import('./timetableReminders'),
+      import('./reminders'),
+      import('../constants/featureFlags'),
+    ]);
+    if (!FEATURES.timetableReminders || !timetableId) return;
+    const audio = await prepareDayOneAudio(timetableId);
+    if (!audio.ok) console.warn('[SessionEdit] day-one call audio not ready', timetableId);
+    await syncReminders('mutation');
+  } catch (e) {
+    console.warn('[SessionEdit] call channel follow-up failed', e);
+  }
+}
+
 export async function saveSessionEdit(
   session: SessionEditSource,
   draft: SessionEditDraft,
@@ -278,6 +298,9 @@ export async function saveSessionEdit(
     } catch (e) {
       console.warn('[SessionEdit] syncReminders failed', e);
     }
+  }
+  if (channelChanged && draft.channel === 'call') {
+    await afterCallChannelSaved(session.timetable_id);
   }
 
   const reminderExists = draft.channel !== 'none';

@@ -69,9 +69,12 @@ export const PROMO_FOOTNOTE = 'Sample lesson shown · SSLC, PUC & more';
 
 export type AITeacherDestination = 'teacher' | 'plans';
 
-/** A student with a plan goes straight to the AI Teacher; everyone else is shown the plans. */
-export function aiTeacherDestination(hasActivePlan: boolean): AITeacherDestination {
-  return hasActivePlan ? 'teacher' : 'plans';
+/**
+ * Every logged-in student goes straight to the AI Teacher. There are no plans any more: Ask AI asks for the
+ * student's own Gemini key instead (see AskAIAssistant). The argument is ignored and kept so existing callers compile.
+ */
+export function aiTeacherDestination(_isLoggedIn?: boolean): AITeacherDestination {
+  return 'teacher';
 }
 
 // ---- the sample-lesson player ------------------------------------------------------------------------------

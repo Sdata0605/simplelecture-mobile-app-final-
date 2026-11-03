@@ -65,6 +65,7 @@ import MyNotesSubjectsScreen from '../screens/MyNotesSubjectsScreen';
 import MyNotesChapterScreen from '../screens/MyNotesChapterScreen';
 import AITeacherScreen from '../screens/AITeacherScreen';
 import AITeacherSettingsScreen from '../screens/AITeacherSettingsScreen';
+import AITeacherPlusScreen from '../screens/AITeacherPlusScreen';
 import RemindersScreen, { RemindersRouteParams } from '../screens/RemindersScreen';
 import IncomingCallScreen from '../screens/IncomingCallScreen';
 import ReminderCallScreen from '../screens/ReminderCallScreen';
@@ -197,7 +198,8 @@ export type RootStackParamList = {
   MyNotesSubjects: { courseId: string; courseName?: string };
   MyNotesChapter: { courseId: string; courseName?: string; subjectId: string; subjectName?: string; initialChapterId?: string };
   AITeacher: { initialSubject?: string } | undefined;
-  AITeacherSettings: undefined;
+  AITeacherSettings: { fromAskAI?: boolean; justPurchased?: boolean } | undefined;
+  AITeacherPlus: { fromAskAI?: boolean } | undefined;
   Reminders: RemindersRouteParams | undefined;
   // src 'tt' and target come from a study-timetable call (target = where "Open topic" goes).
   IncomingCall: { reminderId: string; src?: 'tt'; target?: ReminderTarget | null };
@@ -315,6 +317,7 @@ export default function AppNavigator() {
         <Stack.Screen name="MyNotesChapter" component={MyNotesChapterScreen} />
         <Stack.Screen name="AITeacher" component={AITeacherScreen} />
         <Stack.Screen name="AITeacherSettings" component={AITeacherSettingsScreen} />
+        <Stack.Screen name="AITeacherPlus" component={AITeacherPlusScreen} />
         {REMINDERS_ON && <Stack.Screen name="Reminders" component={RemindersScreen} />}
         {REMINDERS_ON && (
           <Stack.Screen

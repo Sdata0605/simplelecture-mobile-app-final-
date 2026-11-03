@@ -6,15 +6,11 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
   Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, fontSize, borderRadius } from '../../constants/theme';
-import { loadPrefs, savePrefs } from '../../services/aiTeacherPrefs';
-import { testGeminiApiKey } from '../../services/aiTeacherService';
 import { KeyboardShiftView } from '../keyboard/keyboardStick';
 
 interface AITeacherGuideModalProps {
@@ -30,48 +26,10 @@ export function AITeacherGuideModal({
 }: AITeacherGuideModalProps) {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<'how-to-use' | 'api-key'>(defaultTab);
-  const [apiKey, setApiKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
-    if (visible) {
-      loadPrefs().then((p) => {
-        setApiKey(p.apiKey || '');
-        setTestResult(null);
-        setSaveSuccess(false);
-        setActiveTab(defaultTab);
-      });
-    }
+    if (visible) setActiveTab(defaultTab);
   }, [visible, defaultTab]);
-
-  const handleTestKey = async () => {
-    const cleanKey = apiKey.trim();
-    if (!cleanKey) return;
-    setTesting(true);
-    setTestResult(null);
-    const result = await testGeminiApiKey(cleanKey);
-    setTestResult(result);
-    setTesting(false);
-  };
-
-  const handleSaveKey = async () => {
-    const cleanKey = apiKey.trim();
-    const current = await loadPrefs();
-    await savePrefs({ ...current, apiKey: cleanKey });
-    setSaveSuccess(true);
-    setTestResult(null);
-  };
-
-  const handleRemoveKey = async () => {
-    const current = await loadPrefs();
-    await savePrefs({ ...current, apiKey: '' });
-    setApiKey('');
-    setSaveSuccess(false);
-    setTestResult(null);
-  };
 
   const openAiStudio = () => {
     Linking.openURL('https://aistudio.google.com/apikey');
@@ -128,7 +86,7 @@ export function AITeacherGuideModal({
                   activeTab === 'api-key' && styles.tabBtnTextActive,
                 ]}
               >
-                Create & Set Key
+                Create a Key
               </Text>
             </TouchableOpacity>
           </View>
@@ -186,10 +144,9 @@ export function AITeacherGuideModal({
                     <Text style={styles.stepNumText}>4</Text>
                   </View>
                   <View style={styles.stepTextWrap}>
-                    <Text style={styles.stepTitle}>Two Flexible Access Plans</Text>
+                    <Text style={styles.stepTitle}>Your Own Free Keys</Text>
                     <Text style={styles.stepDesc}>
-                      • <Text style={styles.bold}>Pro Plan (₹1,000)</Text>: All-inclusive with built-in AI quota. Optional personal API key support for higher limits.{'\n'}
-                      • <Text style={styles.bold}>Plus Plan (₹500)</Text>: Affordable plan using your own free Google Gemini API key.
+                      Ask AI runs on your own free Google Gemini keys. Add up to 10 in AI Teacher Settings. If one runs out of quota, the next one takes over.
                     </Text>
                   </View>
                 </View>
@@ -216,7 +173,7 @@ export function AITeacherGuideModal({
                     4. Tap the copy icon to copy your key (starts with <Text style={styles.codeText}>AIzaSy...</Text>).
                   </Text>
                   <Text style={styles.guideStep}>
-                    5. Paste it in the input below and tap <Text style={styles.bold}>"Save Key"</Text>.
+                    5. Open <Text style={styles.bold}>AI Teacher Settings</Text> and tap <Text style={styles.bold}>"Add key"</Text> to paste it.
                   </Text>
 
                   <TouchableOpacity style={styles.openStudioBtn} onPress={openAiStudio}>
@@ -225,104 +182,12 @@ export function AITeacherGuideModal({
                   </TouchableOpacity>
                 </View>
 
-                {/* API Key Form */}
-                <View style={styles.keyInputSection}>
-                  <Text style={styles.inputSectionTitle}>Set Your Gemini API Key</Text>
-                  <View style={styles.inputRow}>
-                    <TextInput
-                      style={[styles.keyInput, styles.monoInput]}
-                      placeholder="AIzaSy..."
-                      value={apiKey}
-                      onChangeText={(t) => {
-                        setApiKey(t);
-                        setSaveSuccess(false);
-                        setTestResult(null);
-                      }}
-                      secureTextEntry={!showKey}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                    <TouchableOpacity
-                      style={styles.eyeBtn}
-                      onPress={() => setShowKey(!showKey)}
-                    >
-                      <Ionicons
-                        name={showKey ? 'eye-off-outline' : 'eye-outline'}
-                        size={20}
-                        color={colors.textSecondary}
-                      />
-                    </TouchableOpacity>
-                  </View>
-
-                  <View style={styles.btnRow}>
-                    <TouchableOpacity
-                      style={[styles.actionBtn, styles.saveBtn]}
-                      disabled={!apiKey.trim()}
-                      onPress={handleSaveKey}
-                    >
-                      <Text style={styles.saveBtnText}>Save Key</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.actionBtn, styles.testBtn]}
-                      disabled={!apiKey.trim() || testing}
-                      onPress={handleTestKey}
-                    >
-                      {testing ? (
-                        <ActivityIndicator size="small" color={colors.primary} />
-                      ) : (
-                        <Text style={styles.testBtnText}>Test Key</Text>
-                      )}
-                    </TouchableOpacity>
-
-                    {apiKey.trim() !== '' && (
-                      <TouchableOpacity
-                        style={[styles.actionBtn, styles.removeBtn]}
-                        onPress={handleRemoveKey}
-                      >
-                        <Text style={styles.removeBtnText}>Remove</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  {saveSuccess && (
-                    <View style={styles.msgSuccess}>
-                      <Ionicons name="checkmark-circle" size={16} color="#059669" />
-                      <Text style={styles.msgSuccessText}>
-                        API Key saved successfully! Your AI Teacher is ready.
-                      </Text>
-                    </View>
-                  )}
-
-                  {testResult && (
-                    <View
-                      style={[
-                        styles.msgBox,
-                        testResult.ok ? styles.msgSuccess : styles.msgError,
-                      ]}
-                    >
-                      <Ionicons
-                        name={testResult.ok ? 'checkmark-circle' : 'close-circle'}
-                        size={16}
-                        color={testResult.ok ? '#059669' : '#DC2626'}
-                      />
-                      <Text
-                        style={[
-                          styles.msgText,
-                          testResult.ok ? styles.msgSuccessText : styles.msgErrorText,
-                        ]}
-                      >
-                        {testResult.message}
-                      </Text>
-                    </View>
-                  )}
-
-                  <View style={styles.privacyNote}>
-                    <Ionicons name="shield-checkmark" size={14} color="#10B981" />
-                    <Text style={styles.privacyNoteText}>
-                      Your API key is stored safely on this phone and sent directly to Google. Our servers never receive or store your personal key.
-                    </Text>
-                  </View>
+                {/* Where the keys go */}
+                <View style={styles.privacyNote}>
+                  <Ionicons name="shield-checkmark" size={14} color="#10B981" />
+                  <Text style={styles.privacyNoteText}>
+                    Your keys are saved to your SimpleLecture account and shared with the web app. Only the last few characters are shown.
+                  </Text>
                 </View>
               </View>
             )}
