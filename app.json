@@ -53,7 +53,7 @@
       },
       "package": "com.edulearn.mobile",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 17,
+      "versionCode": 18,
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.RECORD_AUDIO"

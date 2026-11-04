@@ -34,6 +34,10 @@
       "ios": {
         "distribution": "store",
         "autoIncrement": "buildNumber"
+      },
+      "env": {
+        "EXPO_PUBLIC_TT_REMINDERS": "1",
+        "EXPO_PUBLIC_REMINDERS_V2": "1"
       }
     }
   },
