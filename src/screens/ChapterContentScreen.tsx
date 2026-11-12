@@ -393,7 +393,10 @@ export default function ChapterContentScreen() {
           throw new Error(answersResult.error || 'Failed to load answers');
         }
       } else if (source === 'test_results') {
-        const questionsResult = await supabase.getTestQuestions(paperId);
+        // Practice and DPP results have no test_id; their answers are keyed by question id.
+        const questionsResult = paperId
+          ? await supabase.getTestQuestions(paperId)
+          : await supabase.getQuestionsByIds(Object.keys(result.answers || {}));
         if (!questionsResult.success) {
           throw new Error(questionsResult.error || 'Failed to load questions');
         }

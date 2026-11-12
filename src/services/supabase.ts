@@ -7746,6 +7746,37 @@ class SupabaseService {
     }
   }
 
+  async getQuestionsByIds(questionIds: string[]): Promise<{ success: boolean; questions?: any[]; error?: string }> {
+    if (questionIds.length === 0) return { success: true, questions: [] };
+    try {
+      const accessToken = await this.getAccessToken();
+      if (!accessToken) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      const idList = questionIds.map((id) => encodeURIComponent(id)).join(',');
+      const url = `${SUPABASE_URL}/rest/v1/questions?select=id,question_text,question_format,options,correct_answer,explanation,difficulty&id=in.(${idList})`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          ...this.headers,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, error: data.message || 'Failed to fetch questions' };
+      }
+
+      const byId = new Map<string, any>((data || []).map((q: any) => [q.id, q]));
+      const questions = questionIds.map((id) => byId.get(id)).filter(Boolean);
+      return { success: true, questions };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to fetch questions' };
+    }
+  }
+
   async getTestQuestions(testId: string): Promise<{ success: boolean; questions?: any[]; error?: string }> {
     try {
       console.log('[getTestQuestions] Fetching questions for test:', testId);
