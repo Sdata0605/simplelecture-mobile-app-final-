@@ -19,6 +19,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, fontSize, borderRadius } from '../constants/theme';
 import { useSidebar } from '../context/SidebarContext';
 import HeaderMenuButton from '../components/HeaderMenuButton';
+import { KeyboardShiftView } from '../components/keyboard/keyboardStick';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { forumService, ForumCategory, ForumGroup } from '../services/supabase';
 
@@ -361,7 +362,7 @@ export default function ForumScreen() {
         transparent={true}
         onRequestClose={() => setShowCreatePostModal(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardShiftView style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Ask a Question</Text>
@@ -417,7 +418,7 @@ export default function ForumScreen() {
               )}
             </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardShiftView>
       </Modal>
 
       <Modal
@@ -426,7 +427,7 @@ export default function ForumScreen() {
         transparent={true}
         onRequestClose={() => setShowCreateGroupModal(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardShiftView style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Create Discussion Group</Text>
@@ -477,7 +478,7 @@ export default function ForumScreen() {
               )}
             </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardShiftView>
       </Modal>
     </View>
   );

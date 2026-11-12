@@ -610,7 +610,10 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    height: 52,
     marginLeft: spacing.sm,
+    paddingVertical: 0,
+    textAlignVertical: 'center',
     fontSize: fontSize.md,
     color: colors.text,
   },

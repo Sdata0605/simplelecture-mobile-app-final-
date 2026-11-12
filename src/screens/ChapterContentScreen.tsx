@@ -117,6 +117,7 @@ export default function ChapterContentScreen() {
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [reviewQuestions, setReviewQuestions] = useState<any[]>([]);
   const [reviewQuestionsLoading, setReviewQuestionsLoading] = useState(false);
+  const [reviewQuestionsError, setReviewQuestionsError] = useState<string | null>(null);
   const [studentAnswers, setStudentAnswers] = useState<any[]>([]);
   
   // Questions state (MCQ + Subjective)
@@ -371,6 +372,7 @@ export default function ChapterContentScreen() {
   const fetchReviewData = async (result: any) => {
     if (!userId) return;
     setReviewQuestionsLoading(true);
+    setReviewQuestionsError(null);
     setReviewQuestions([]);
     setStudentAnswers([]);
     try {
@@ -381,29 +383,40 @@ export default function ChapterContentScreen() {
           supabase.getPreviousYearQuestions(paperId),
           supabase.getStudentAnswers(paperId, userId),
         ]);
-        if (questionsResult.success && questionsResult.questions) {
-          setReviewQuestions(questionsResult.questions);
+        if (!questionsResult.success) {
+          throw new Error(questionsResult.error || 'Failed to load questions');
         }
+        setReviewQuestions(questionsResult.questions || []);
         if (answersResult.success && answersResult.answers) {
           setStudentAnswers(answersResult.answers);
+        } else {
+          throw new Error(answersResult.error || 'Failed to load answers');
         }
       } else if (source === 'test_results') {
         const questionsResult = await supabase.getTestQuestions(paperId);
-        if (questionsResult.success && questionsResult.questions) {
-          const mappedQuestions = questionsResult.questions.map((tq: any) => ({
-            id: tq.question?.id || tq.question_id,
-            question_text: tq.question?.question_text || '',
-            options: tq.question?.options || null,
-            correct_answer: tq.question?.correct_answer || null,
-            explanation: tq.question?.explanation || null,
-            difficulty: tq.question?.difficulty || 'medium',
-            question_format: tq.question?.question_format || null,
-          }));
-          setReviewQuestions(mappedQuestions);
+        if (!questionsResult.success) {
+          throw new Error(questionsResult.error || 'Failed to load questions');
         }
+        // getTestQuestions already flattens each test_questions row into its
+        // question object (question fields + order_number/marks), so read the
+        // question from the row itself and fall back to a nested `question`.
+        const mappedQuestions = (questionsResult.questions || []).map((tq: any) => {
+          const q = tq.question || tq;
+          return {
+            id: q.id || tq.question_id,
+            question_text: q.question_text || '',
+            options: q.options || null,
+            correct_answer: q.correct_answer || null,
+            explanation: q.explanation || null,
+            difficulty: q.difficulty || 'medium',
+            question_format: q.question_format || null,
+          };
+        });
+        setReviewQuestions(mappedQuestions);
       }
     } catch (error) {
       console.error('[fetchReviewData] Error:', error);
+      setReviewQuestionsError('Could not load answers. Tap to retry.');
     }
     setReviewQuestionsLoading(false);
   };
@@ -1661,6 +1674,7 @@ export default function ChapterContentScreen() {
                   setSelectedResult(null);
                   setReviewQuestions([]);
                   setStudentAnswers([]);
+                  setReviewQuestionsError(null);
                 }}>
                   <Ionicons name="close" size={24} color={colors.text} />
                 </TouchableOpacity>
@@ -1706,6 +1720,18 @@ export default function ChapterContentScreen() {
                     <View style={styles.loadingContainer}>
                       <ActivityIndicator size="small" color={colors.primary} />
                       <Text style={styles.loadingText}>Loading questions...</Text>
+                    </View>
+                  ) : reviewQuestionsError ? (
+                    <TouchableOpacity
+                      onPress={() => fetchReviewData(selectedResult)}
+                      style={{ alignItems: 'center', paddingVertical: spacing.lg }}
+                    >
+                      <Ionicons name="alert-circle-outline" size={28} color="#EF4444" />
+                      <Text style={{ fontSize: 14, color: '#EF4444', marginTop: 8, textAlign: 'center' }}>{reviewQuestionsError}</Text>
+                    </TouchableOpacity>
+                  ) : reviewQuestions.length === 0 ? (
+                    <View style={{ alignItems: 'center', paddingVertical: spacing.lg }}>
+                      <Text style={{ fontSize: 14, color: colors.textSecondary }}>No questions found for this test.</Text>
                     </View>
                   ) : (
                     <View>

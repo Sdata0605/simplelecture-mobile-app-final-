@@ -11,6 +11,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -34,13 +35,17 @@ interface AIChatMessage {
   timestamp: Date;
 }
 
+// Must match support_tickets.category CHECK constraint and the website TICKET_CATEGORIES.
 const SUPPORT_CATEGORIES = [
-  { id: 'general', label: 'General', icon: 'help-circle' },
-  { id: 'technical', label: 'Technical', icon: 'settings' },
-  { id: 'billing', label: 'Billing', icon: 'card' },
-  { id: 'courses', label: 'Courses', icon: 'book' },
-  { id: 'account', label: 'Account', icon: 'person' },
+  { id: 'technical', label: 'Technical Issue', icon: 'construct' },
+  { id: 'payment', label: 'Payment / Billing', icon: 'card' },
+  { id: 'account', label: 'Account / Login', icon: 'person' },
+  { id: 'course_access', label: 'Course Access', icon: 'school' },
+  { id: 'certificate', label: 'Certificate', icon: 'ribbon' },
+  { id: 'feature_request', label: 'Feature Request', icon: 'bulb' },
+  { id: 'other', label: 'Other', icon: 'ellipsis-horizontal' },
 ];
+const DEFAULT_TICKET_CATEGORY = 'technical';
 
 const FAQ_CATEGORIES = ['All', 'General', 'Technical', 'Billing', 'Courses', 'Account'];
 
@@ -87,7 +92,7 @@ export default function SupportScreen() {
   const [ticketMessages, setTicketMessages] = useState<SupportMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   
-  const [newTicketCategory, setNewTicketCategory] = useState('general');
+  const [newTicketCategory, setNewTicketCategory] = useState(DEFAULT_TICKET_CATEGORY);
   const [newTicketSubject, setNewTicketSubject] = useState('');
   const [newTicketMessage, setNewTicketMessage] = useState('');
   const [creatingTicket, setCreatingTicket] = useState(false);
@@ -165,9 +170,21 @@ export default function SupportScreen() {
       setShowNewTicketModal(false);
       setNewTicketSubject('');
       setNewTicketMessage('');
+      setNewTicketCategory(DEFAULT_TICKET_CATEGORY);
       loadTickets();
+    } else {
+      // Keep the modal open so the user can retry; surface the reason.
+      Alert.alert(
+        'Could not create ticket',
+        result.error || 'Something went wrong. Please try again.'
+      );
     }
     setCreatingTicket(false);
+  };
+
+  const openNewTicketModal = () => {
+    setNewTicketCategory(DEFAULT_TICKET_CATEGORY);
+    setShowNewTicketModal(true);
   };
 
   const handleSendMessage = async () => {
@@ -671,7 +688,7 @@ export default function SupportScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.createTicketLink}
-              onPress={() => setShowNewTicketModal(true)}
+              onPress={openNewTicketModal}
             >
               <Text style={styles.createTicketLinkText}>Create a support ticket instead →</Text>
             </TouchableOpacity>
@@ -687,7 +704,7 @@ export default function SupportScreen() {
     <View style={styles.tabContent}>
       <TouchableOpacity
         style={styles.newTicketButton}
-        onPress={() => setShowNewTicketModal(true)}
+        onPress={openNewTicketModal}
       >
         <LinearGradient
           colors={[colors.primary, '#4ADE80']}

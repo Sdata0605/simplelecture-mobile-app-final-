@@ -111,6 +111,7 @@ export default function V5PlayerScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(true);
+  const playIntentRef = useRef(true);
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [positionMillis, setPositionMillis] = useState(0);
@@ -304,14 +305,18 @@ export default function V5PlayerScreen() {
     [navigation],
   );
 
+  const setPlayIntent = useCallback((playing: boolean) => {
+    playIntentRef.current = playing;
+    setIsPlaying(playing);
+    const video = videoRef.current;
+    if (playing) video?.playAsync().catch(() => {});
+    else video?.pauseAsync().catch(() => {});
+  }, []);
+
   const togglePlayback = useCallback(() => {
-    setIsPlaying((playing) => {
-      if (playing) videoRef.current?.pauseAsync().catch(() => {});
-      else videoRef.current?.playAsync().catch(() => {});
-      return !playing;
-    });
+    setPlayIntent(!playIntentRef.current);
     showControls();
-  }, [showControls]);
+  }, [setPlayIntent, showControls]);
 
   const seekTo = useCallback(
     (millis: number) => {
@@ -337,10 +342,9 @@ export default function V5PlayerScreen() {
     endPrompt.decline();
     setPositionMillis(0);
     videoRef.current?.setPositionAsync(0).catch(() => {});
-    videoRef.current?.playAsync().catch(() => {});
-    setIsPlaying(true);
+    setPlayIntent(true);
     showControls();
-  }, [showControls, endPrompt.decline]);
+  }, [showControls, endPrompt.decline, setPlayIntent]);
 
   const toggleMute = useCallback(() => {
     setIsMuted((muted) => !muted);
@@ -353,16 +357,15 @@ export default function V5PlayerScreen() {
   // a video the student had already paused themselves).
   const handleAskAI = useCallback(() => {
     if (!teacherSubject) return;
-    resumeAfterAskRef.current = isPlaying;
+    resumeAfterAskRef.current = playIntentRef.current;
     setAskTrigger('mid');
-    videoRef.current?.pauseAsync().catch(() => {});
-    setIsPlaying(false);
+    setPlayIntent(false);
     setAskContext(buildAskContext(timeline, position.active, positionMillis / 1000, durationMillis / 1000));
     askWasFullscreenRef.current = isFullscreen;
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
     setAskAIOpen(true);
     showControls();
-  }, [teacherSubject, isPlaying, timeline, position.active, positionMillis, durationMillis, isFullscreen, showControls]);
+  }, [teacherSubject, setPlayIntent, timeline, position.active, positionMillis, durationMillis, isFullscreen, showControls]);
 
   const handleCloseAskAI = useCallback(() => {
     setAskAIOpen(false);
@@ -378,10 +381,9 @@ export default function V5PlayerScreen() {
     }
     if (resumeAfterAskRef.current) {
       resumeAfterAskRef.current = false;
-      videoRef.current?.playAsync().catch(() => {});
-      setIsPlaying(true);
+      setPlayIntent(true);
     }
-  }, []);
+  }, [setPlayIntent]);
 
   // No AI Teacher plan: leave the lecture for the plans screen (the player's own back handling restores the orientation).
   const handleOpenPlans = useCallback(() => {
@@ -402,8 +404,7 @@ export default function V5PlayerScreen() {
     resumeAfterAskRef.current = false;
     setAskTrigger('end');
     setAskContext(null);
-    videoRef.current?.pauseAsync().catch(() => {});
-    setIsPlaying(false);
+    setPlayIntent(false);
     askWasFullscreenRef.current = isFullscreen;
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
     setAskAIOpen(true);
@@ -436,7 +437,10 @@ export default function V5PlayerScreen() {
     if (!status.isLoaded) return;
     setPositionMillis(status.positionMillis);
     setDurationMillis(status.durationMillis ?? 0);
-    setIsPlaying(status.isPlaying);
+    if (status.didJustFinish) {
+      playIntentRef.current = false;
+      setIsPlaying(false);
+    }
     endPrompt.onStatus(status, playbackRate);
   }, [endPrompt.onStatus, playbackRate]);
 
@@ -454,6 +458,9 @@ export default function V5PlayerScreen() {
     }
     if (playbackRate !== 1) {
       await videoRef.current?.setRateAsync(playbackRate, true).catch(() => {});
+    }
+    if (playIntentRef.current) {
+      videoRef.current?.playAsync().catch(() => {});
     }
   }, [playbackRate]);
 
@@ -743,7 +750,6 @@ export default function V5PlayerScreen() {
               source={{ uri: videoUrl }}
               style={styles.video}
               resizeMode={ResizeMode.CONTAIN}
-              shouldPlay={isPlaying}
               isMuted={isMuted}
               rate={playbackRate}
               shouldCorrectPitch

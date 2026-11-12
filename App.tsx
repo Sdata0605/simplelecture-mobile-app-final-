@@ -42,6 +42,7 @@ import AppNavigator, { navigationRef } from './src/navigation/AppNavigator';
 import { AskAIHost } from './src/components/askAssistant/AskAIHost';
 import ReminderNotificationBridge from './src/components/reminders/ReminderNotificationBridge';
 import { FEATURES, isCallRemindersEnabled } from './src/constants/featureFlags';
+import AppErrorBoundary from './src/components/AppErrorBoundary';
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
@@ -136,7 +137,19 @@ function applyGlobalFonts() {
   }
 }
 
-const queryClient = new QueryClient();
+// Conservative app-wide defaults; every current useQuery sets its own staleTime (5 min) and still overrides these.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+    },
+    mutations: { retry: 0 },
+  },
+});
 
 function NotificationScheduler() {
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
@@ -238,22 +251,24 @@ export default function App() {
   applyGlobalFonts();
 
   return (
-    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <CartProvider>
-            <StatusBar style="light" />
-            <NotificationScheduler />
-            <NotificationTapHandler />
-            <ReminderNotificationBridge />
-            <SidebarProvider>
-              <AppNavigator />
-              <GlobalAIButton />
-            </SidebarProvider>
-            <AskAIHost />
-          </CartProvider>
-        </AuthProvider>
-      </QueryClientProvider>
-    </SafeAreaProvider>
+    <AppErrorBoundary>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <CartProvider>
+              <StatusBar style="light" />
+              <NotificationScheduler />
+              <NotificationTapHandler />
+              <ReminderNotificationBridge />
+              <SidebarProvider>
+                <AppNavigator />
+                <GlobalAIButton />
+              </SidebarProvider>
+              <AskAIHost />
+            </CartProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </AppErrorBoundary>
   );
 }

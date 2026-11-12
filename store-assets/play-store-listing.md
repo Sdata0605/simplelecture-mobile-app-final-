@@ -6,26 +6,26 @@ Paste each section directly into the corresponding field in Google Play Console.
 
 ## App Title (50 chars max)
 ```
-Simple Lecture – Online Learning
+Simple Lecture – AI Tutor & Online Classes
 ```
-(32 chars ✅)
+(42 chars ✅)
 
 ---
 
 ## Short Description (80 chars max — shown in search results)
 ```
-AI tutor, live classes & doubt solving for JEE, NEET & school students in India
+AI tutor, live classes & doubt solving for CBSE, JEE, NEET – Class 6-12
 ```
-(80 chars ✅)
+(71 chars ✅)
 
 ---
 
 ## Long Description (paste into Play Console "Full description" field)
 
 ```
-📚 SIMPLE LECTURE — India's AI-Powered Learning App
+📚 SIMPLE LECTURE — AI Tutor & Online Classes for CBSE, JEE, NEET (Class 6–12)
 
-Learn smarter with AI-driven video lectures, live doubt solving, and personalised learning paths built for JEE, NEET, CBSE, and all major Indian board exams.
+Prepare for board exams, JEE and NEET with AI video lectures, instant doubt solving, live classes and chapter-wise practice. Learn in Hindi, Marathi and 10+ other regional languages — built for Indian students.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🤖 AI TEACHING ASSISTANT
@@ -35,8 +35,10 @@ Our AI tutor explains every topic with animated slides, real-time narration, dia
 🎯 KEY FEATURES
 • AI Lecture Player — visual explanations, avatar narration, quizzes inside every video
 • Doubt Solving — ask any question and get instant AI-generated answers with step-by-step reasoning
-• Live Classes — join scheduled sessions and interact with expert educators
+• Live Classes — join scheduled sessions and interact with expert educators, and watch recordings later
+• Tests and previous year papers — practise for your board exam, JEE and NEET
 • AI-graded DPP (Daily Practice Problems) — automated subjective answer evaluation
+• Study plan and notes — organise your preparation chapter by chapter
 • Forum — discuss topics, upvote answers, and learn from peers
 
 📈 TRACK YOUR PROGRESS
@@ -56,7 +58,7 @@ Our AI tutor explains every topic with animated slides, real-time narration, dia
 • Secure payments via Razorpay (UPI, cards, net banking) with GST compliance
 
 🏆 WHO IS IT FOR?
-• Class 6–12 students preparing for board exams
+• Class 6–12 students preparing for CBSE and other board exams
 • JEE Main, JEE Advanced aspirants
 • NEET UG aspirants
 • Students looking for affordable online coaching in India
@@ -65,11 +67,11 @@ Our AI tutor explains every topic with animated slides, real-time narration, dia
 🔒 SAFE & SECURE
 • Your data is encrypted and never sold to third parties
 • OTP + Google Sign-In authentication
-• Privacy Policy: [Your deployed URL]/privacy-policy
+• Privacy Policy: https://simplelecture.com/privacy
 
-Download Simple Lecture now and start learning smarter — for free!
+Download Simple Lecture now and start learning smarter with your own AI tutor.
 
-#OnlineLearning #AITutor #JEEPreparation #NEETPreparation #StudyApp #OnlineCoaching #EdTech #India #DoubtSolving #LiveClasses
+#OnlineLearning #AITutor #CBSE #JEEPreparation #NEETPreparation #BoardExam #StudyApp #OnlineCoaching #EdTech #India #DoubtSolving #LiveClasses
 ```
 
 ---
@@ -125,7 +127,7 @@ Complete the questionnaire in Play Console. Expected rating: **Everyone** (no vi
 
 - Users can request deletion: **Yes** (via support ticket or email)
 - Data is encrypted in transit: **Yes** (TLS)
-- Users can review the Privacy Policy: **Yes** — link: `[Your deployed URL]/privacy-policy`
+- Users can review the Privacy Policy: **Yes** — link: `https://simplelecture.com/privacy`
 
 ---
 

@@ -15,6 +15,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, fontSize, borderRadius } from '../constants/theme';
+import { KeyboardShiftView } from '../components/keyboard/keyboardStick';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { forumService, ForumPost, ForumCategory } from '../services/supabase';
 
@@ -219,7 +220,7 @@ export default function ForumCategoryScreen() {
         transparent={true}
         onRequestClose={() => setShowCreatePostModal(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardShiftView style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Ask a Question</Text>
@@ -260,7 +261,7 @@ export default function ForumCategoryScreen() {
               )}
             </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardShiftView>
       </Modal>
     </View>
   );
