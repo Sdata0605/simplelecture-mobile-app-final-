@@ -27,7 +27,6 @@ function springTo(pos: Animated.ValueXY, placement: FabPlacement, box: FabBox) {
 }
 
 interface Props {
-  hasActivePlan: boolean;
   onPress: () => void;
   /** The area the button floats in. */
   box: FabBox;
@@ -35,7 +34,7 @@ interface Props {
   onPlacementChange: (placement: FabPlacement) => void;
 }
 
-export function AITeacherFab({ hasActivePlan, onPress, box, placement, onPlacementChange }: Props) {
+export function AITeacherFab({ onPress, box, placement, onPlacementChange }: Props) {
   const insets = useSafeAreaInsets();
   const reduceMotion = useReduceMotion();
   const bob = useRef(new Animated.Value(0)).current;
@@ -125,7 +124,7 @@ export function AITeacherFab({ hasActivePlan, onPress, box, placement, onPlaceme
       {...responder.panHandlers}
       accessible
       accessibilityRole="button"
-      accessibilityLabel={hasActivePlan ? 'Open AI Teacher' : 'See AI Teacher plans'}
+      accessibilityLabel="AI Teacher"
       style={[styles.anchor, { transform: pos.getTranslateTransform() }]}
     >
       <Animated.View
@@ -136,7 +135,7 @@ export function AITeacherFab({ hasActivePlan, onPress, box, placement, onPlaceme
           { opacity: label, transform: [{ translateX: label.interpolate({ inputRange: [0, 1], outputRange: [labelFrom, 0] }) }] },
         ]}
       >
-        <Text style={styles.labelText} numberOfLines={1}>{hasActivePlan ? 'Ask AI Teacher' : 'Meet your AI Teacher'}</Text>
+        <Text style={styles.labelText} numberOfLines={1}>AI Teacher</Text>
       </Animated.View>
 
       <Animated.View pointerEvents="none" style={{ transform: [{ translateY: bob }] }}>

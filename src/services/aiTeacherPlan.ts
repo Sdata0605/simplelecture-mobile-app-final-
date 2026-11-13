@@ -1,76 +1,40 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getAiTeacherSettings, AiTeacherSettings } from './aiTeacherKeys';
-import { supabase } from './supabase';
 
 /**
- * Whether the student has the Plus plan (Rs 500), as the server says it.
- * - 'loading': no answer yet, show a spinner. Never a purchase card.
- * - 'active': the server said yes.
- * - 'inactive': the server said no. Only this state may send the student to the purchase page.
- * - 'unknown': the check failed or the response had no plan field. Never a purchase card.
+ * Whether the student may use the AI Teacher, as the server says it (`plan.active` in the ai-teacher-keys "get" action).
+ * The rule matches the website: logged in AND at least one active, unexpired course enrollment.
+ * - 'loading': no answer yet. Shows a spinner.
+ * - 'logged_out': no session. The screens show the log-in prompt; the server is not asked.
+ * - 'active': the server said yes (enrolled).
+ * - 'inactive': the server said no (not enrolled). Only this state shows the Enroll prompt.
+ * - 'error': the check failed or the response had no plan field. Shows a retry, never the Enroll prompt.
+ *
+ * Nothing is cached on the device for gating: a stale "inactive" from before enrolment must not block the student.
  */
-export type PlanState = 'loading' | 'active' | 'inactive' | 'unknown';
-
-export interface PlanCacheEntry {
-  active: boolean;
-  checkedAt: string;
-}
-
-const PLAN_CACHE_PREFIX = '@aiteacher_plan_v1:';
+export type PlanState = 'loading' | 'logged_out' | 'active' | 'inactive' | 'error';
 
 export function resolvePlanState({
   serverActive,
-  error,
-  cached,
 }: {
   serverActive?: boolean | null;
-  error?: unknown;
-  cached?: { active: boolean } | null;
 }): PlanState {
   if (serverActive === true) return 'active';
   if (serverActive === false) return 'inactive';
-  // The check failed, or the response had no plan field: fall back to the last answer for this user, if any.
-  if (error || serverActive === undefined || serverActive === null) {
-    if (cached) return cached.active ? 'active' : 'inactive';
-    return 'unknown';
-  }
-  return 'unknown';
-}
-
-export async function readPlanCache(userId: string): Promise<PlanCacheEntry | null> {
-  try {
-    const raw = await AsyncStorage.getItem(PLAN_CACHE_PREFIX + userId);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.active === 'boolean') {
-      return { active: parsed.active, checkedAt: String(parsed.checkedAt ?? '') };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-export async function writePlanCache(userId: string, active: boolean): Promise<void> {
-  try {
-    const entry: PlanCacheEntry = { active, checkedAt: new Date().toISOString() };
-    await AsyncStorage.setItem(PLAN_CACHE_PREFIX + userId, JSON.stringify(entry));
-  } catch {
-    // The cache is only a fallback for when the server cannot be reached; losing a write is harmless.
-  }
+  // Failed request, or a response with no plan field: unknown, not "not enrolled".
+  return 'error';
 }
 
 /**
- * Asks the server for the plan state. Runs once on mount (when `enabled`) and again whenever `refresh` is called.
- * Logged out (`enabled` false) counts as 'inactive', as before. Stale answers from an older request are ignored.
+ * Asks the server for the enrollment state. Runs on mount (when `enabled`) and again on every `refresh` call.
+ * Stale answers from an older request are ignored. Logged out (`enabled` false) never calls the server.
  */
 export function useAiTeacherPlan(enabled: boolean): {
   state: PlanState;
   settings: AiTeacherSettings | null;
   refresh: () => void;
 } {
-  const [state, setState] = useState<PlanState>(enabled ? 'loading' : 'inactive');
+  const [state, setState] = useState<PlanState>(enabled ? 'loading' : 'logged_out');
   const [settings, setSettings] = useState<AiTeacherSettings | null>(null);
   const requestRef = useRef(0);
 
@@ -78,30 +42,25 @@ export function useAiTeacherPlan(enabled: boolean): {
     if (!enabled) {
       requestRef.current += 1;
       setSettings(null);
-      setState('inactive');
+      setState('logged_out');
       return;
     }
+    // Keep the current answer on screen during a re-check; only the first check shows the spinner.
+    setState((prev) => (prev === 'logged_out' ? 'loading' : prev));
     const id = ++requestRef.current;
     void (async () => {
       let answer: AiTeacherSettings | null = null;
-      let error: unknown = null;
       try {
         answer = await getAiTeacherSettings();
-      } catch (err) {
-        error = err;
+      } catch {
+        answer = null;
       }
       const serverActive =
         answer?.plan && typeof answer.plan.active === 'boolean' ? answer.plan.active : undefined;
 
-      let cached: PlanCacheEntry | null = null;
-      if (serverActive === undefined) {
-        const user = await supabase.getStoredUser().catch(() => null);
-        if (user?.id) cached = await readPlanCache(user.id);
-      }
-
       if (id !== requestRef.current) return;
       setSettings(answer);
-      setState(resolvePlanState({ serverActive, error, cached }));
+      setState(resolvePlanState({ serverActive }));
     })();
   }, [enabled]);
 

@@ -78,8 +78,6 @@ export interface AskAIAssistantProps {
   lectureLanguage?: string | null;
   /** Where the lecture was paused (mid-lecture only). */
   context?: LectureAskContext | null;
-  /** No longer used (there are no plans); kept only so V5PlayerScreen still compiles until it is updated. */
-  onOpenPlans?: () => void;
   /** Opens the teacher settings (their Gemini keys, voice). Shown as a gear in the top bar when given. */
   onOpenSettings?: () => void;
 }
@@ -109,7 +107,7 @@ export function AskAIAssistant(props: AskAIAssistantProps) {
     dispatch({ type: 'RESET' });
   }, [subjectId]);
 
-  // Whether the Plus plan (Rs 500) is bought, as the server says. Only 'inactive' may show the purchase gate.
+  // Whether the student is enrolled in a course, as the server says (same rule as the website).
   const { state: planState, settings: teacherSettings, refresh: refreshPlan } = useAiTeacherPlan(!!isAuthenticated);
   // How many Gemini keys the student has saved. null until the settings have loaded (then nothing is gated).
   const keyCount: number | null = teacherSettings ? teacherSettings.keys.length : null;
@@ -124,10 +122,16 @@ export function AskAIAssistant(props: AskAIAssistantProps) {
     (navigationRef.current?.navigate as ((...args: any[]) => void) | undefined)?.('AITeacherSettings', { fromAskAI: true });
   };
 
-  // Closes Ask AI, then opens the full-screen purchase page on top; it comes back to Ask AI on back (fromAskAI).
-  const openPlan = () => {
+  // Closes Ask AI, then opens the course catalogue so the student can enroll.
+  const openCourses = () => {
     onClose();
-    (navigationRef.current?.navigate as ((...args: any[]) => void) | undefined)?.('AITeacherPlus', { fromAskAI: true });
+    (navigationRef.current?.navigate as ((...args: any[]) => void) | undefined)?.('Courses');
+  };
+
+  // Closes Ask AI, then opens the login screen.
+  const openLogin = () => {
+    onClose();
+    (navigationRef.current?.navigate as ((...args: any[]) => void) | undefined)?.('Login');
   };
 
   // The lesson loader: shown from the moment a subject is chosen until the teacher's lesson is ready (or 15 s).
@@ -145,41 +149,22 @@ export function AskAIAssistant(props: AskAIAssistantProps) {
 
   let body: React.ReactNode;
   if (!isAuthenticated) {
-    body = <Gate icon="lock-closed" title="Log in to talk to your AI teacher" text="Your AI teacher answers your doubts by voice while you watch." />;
+    body = <Gate icon="lock-closed" title="Log in to talk to your AI teacher" action={{ label: 'Log in', onPress: openLogin }} />;
   } else if (planState === 'loading') {
-    body = (
-      <View style={styles.gate}>
-        <ActivityIndicator color={ask.mint} />
-      </View>
-    );
-  } else if (planState === 'unknown') {
+    body = <Gate icon="sparkles" title="Getting your teacher ready..." />;
+  } else if (planState === 'error') {
     body = (
       <Gate
         icon="cloud-offline-outline"
-        title="Could not check your plan."
-        text="Check your internet connection, then try again."
+        title="Could not check your enrollment."
         action={{ label: 'Retry', onPress: refreshPlan }}
       />
     );
   } else if (planState === 'inactive') {
-    // Plan first: the Plus plan must be bought before any key can be added.
-    body = (
-      <Gate
-        icon="sparkles"
-        title="Buy AI Teacher Plus (Rs 500) to start"
-        text="Buy the Plus plan, then add up to 10 of your own free Google Gemini keys. Your teacher is ready once you do."
-        action={{ label: 'Buy AI Teacher Plus (Rs 500) to start', onPress: openPlan }}
-      />
-    );
+    // Enrollment first: a student must be enrolled in a course before any key can be added.
+    body = <Gate icon="school" title="Enroll in a course to start" action={{ label: 'Browse courses', onPress: openCourses }} />;
   } else if (keyCount === 0) {
-    body = (
-      <Gate
-        icon="key"
-        title="Add your Gemini key to start"
-        text="Ask AI uses your own free Google Gemini API key. Add one (you can add up to 10) and your teacher is ready."
-        action={{ label: 'Add your Gemini key to start', onPress: openKeySettings }}
-      />
-    );
+    body = <Gate icon="key" title="Add your Gemini key to start" action={{ label: 'Add your key', onPress: openKeySettings }} />;
   } else if (subject) {
     inLesson = true;
     body = <LiveLecture {...props} subject={subject} focus={focus} dispatch={dispatch} reduceMotion={reduceMotion} onReady={markLessonReady} />;

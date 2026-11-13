@@ -12,6 +12,11 @@ export const colors = {
   success: '#10B981',
   warning: '#F59E0B',
   error: '#EF4444',
+  successBg: '#D1FAE5',
+  errorBg: '#FEE2E2',
+  warningBg: '#FEF3C7',
+  info: '#2563EB',
+  infoBg: '#DBEAFE',
   white: '#FFFFFF',
   black: '#000000',
   gray: {

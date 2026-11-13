@@ -5420,7 +5420,7 @@ class SupabaseService {
 
   // Get student's test results for a specific chapter from all sources
   // Fetches from: paper_test_results, test_results, dpp_topic_submissions
-  async getChapterTestResults(studentId: string, chapterId: string, subjectId?: string): Promise<{ success: boolean; results?: any[]; error?: string }> {
+  async getChapterTestResults(studentId: string, chapterId: string, subjectId?: string, topicId?: string): Promise<{ success: boolean; results?: any[]; error?: string }> {
     try {
       const accessToken = await this.getAccessToken();
       if (!accessToken) {
@@ -5436,6 +5436,11 @@ class SupabaseService {
       if (subjectId) {
         // Filter by subject_id - this is the correct way per documentation
         testResultsUrl += `&subject_id=eq.${subjectId}`;
+      }
+
+      if (topicId) {
+        // Exclude results belonging to other topics
+        testResultsUrl += `&topic_id=eq.${topicId}`;
       }
       
       // Fetch from two sources in parallel (per documentation, DPP comes from test_results, not dpp_topic_submissions)
@@ -5519,14 +5524,33 @@ class SupabaseService {
           // DPP detection: check test_type OR title contains 'dpp'
           const isDpp = testType.toLowerCase() === 'dpp' || testTitle.toLowerCase().includes('dpp');
           
+          // Prefer the explicit test_type column when set
+          const explicitType = item.test_type ? String(item.test_type).toLowerCase() : '';
           let category = 'exam';
-          if (isDpp) {
+          if (explicitType === 'dpp') {
+            category = 'dpp';
+          } else if (explicitType === 'practice') {
+            category = 'practice';
+          } else if (explicitType === 'assignment') {
+            category = 'assignment';
+          } else if (isDpp) {
             category = 'dpp';
           } else if (testType === 'proficiency') {
             category = 'proficiency';
           } else if (testType === 'mock' || testType === 'practice') {
             category = 'exam';
           }
+          // Practice/DPP runs have no test_id; never let them fall through to 'exam'
+          if (item.test_id == null && category === 'exam') {
+            category = testType.toLowerCase() === 'dpp' ? 'dpp' : 'practice';
+          }
+          const categoryLabels: Record<string, string> = {
+            dpp: 'DPP',
+            practice: 'Practice',
+            assignment: 'Assignment',
+            exam: 'Exam',
+            proficiency: 'Proficiency',
+          };
           
           unifiedResults.push({
             id: item.id,
@@ -5543,7 +5567,11 @@ class SupabaseService {
               exam_name: item.test.title,
               year: null,
               paper_type: isDpp ? 'DPP' : item.test.test_type,
-            } : null,
+            } : {
+              exam_name: null,
+              year: null,
+              paper_type: categoryLabels[category] || category,
+            },
             isFromTestsTable: true,
             source: 'test_results',
           });
@@ -7755,7 +7783,7 @@ class SupabaseService {
       }
 
       const idList = questionIds.map((id) => encodeURIComponent(id)).join(',');
-      const url = `${SUPABASE_URL}/rest/v1/questions?select=id,question_text,question_format,options,correct_answer,explanation,difficulty&id=in.(${idList})`;
+      const url = `${SUPABASE_URL}/rest/v1/questions?select=id,question_text,question_format,options,correct_answer,explanation,difficulty,question_image_url,question_type,marks&id=in.(${idList})`;
       const response = await fetch(url, {
         method: 'GET',
         headers: {

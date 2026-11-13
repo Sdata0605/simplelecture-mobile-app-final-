@@ -73,7 +73,7 @@ function errorMessage(err: any): string {
     case 'UNAUTHORIZED':
       return 'Please log in again to manage your keys.';
     case 'PLAN_REQUIRED':
-      return 'Buy AI Teacher Plus (Rs 500) to add and manage your keys.';
+      return 'Enroll in a course to add and manage your keys.';
     default:
       return String(err?.message || 'Something went wrong. Please try again.');
   }
@@ -83,9 +83,8 @@ export default function AITeacherSettingsScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute();
-  const routeParams = route.params as { fromAskAI?: boolean; justPurchased?: boolean } | undefined;
+  const routeParams = route.params as { fromAskAI?: boolean } | undefined;
   const fromAskAI = !!routeParams?.fromAskAI;
-  const justPurchased = !!routeParams?.justPurchased;
 
   // Opened from Ask AI: going back (or unmounting for any reason) reopens Ask AI.
   const fromAskAIRef = useRef(fromAskAI);
@@ -115,14 +114,14 @@ export default function AITeacherSettingsScreen() {
 
   const keys: AiTeacherKey[] = settings?.keys ?? [];
   const maxKeys = settings?.maxKeys ?? 10;
-  // The plan as the server answered it. 'inactive' only when the server said false; offline or no plan field is 'unknown'.
+  // The enrollment state as the server answered it. 'inactive' only when the server said false; offline or no plan field is 'error'.
   const planState: PlanState = offline
-    ? 'unknown'
+    ? 'error'
     : !settings
       ? 'loading'
       : resolvePlanState({ serverActive: settings.plan?.active });
-  // Key controls show when the plan is active, or when it was active the last time the server said so and we are offline.
-  const planActive = planState === 'active' || (planState === 'unknown' && settings?.plan?.active === true);
+  // Key controls show when the student is enrolled, or when they were enrolled the last time the server said so and we are offline.
+  const planActive = planState === 'active' || (planState === 'error' && settings?.plan?.active === true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -144,16 +143,6 @@ export default function AITeacherSettingsScreen() {
     loadPrefs().then((p) => setDraft(p));
     void load();
   }, [load]);
-
-  // The server said no Plus plan: skip settings and show the full-screen purchase page first.
-  // Only a server answer of false redirects; offline or an unknown plan never does.
-  useEffect(() => {
-    if (planState === 'inactive') {
-      // Replacing this screen must not reopen Ask AI on unmount.
-      fromAskAIRef.current = false;
-      navigation.replace('AITeacherPlus', { fromAskAI });
-    }
-  }, [planState, navigation, fromAskAI]);
 
   /** Runs one key action; on success the returned settings replace the key list. Returns null on failure. */
   const runKeyAction = async (
@@ -303,13 +292,13 @@ export default function AITeacherSettingsScreen() {
         style={styles.scrollArea}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: spacing.xxl + insets.bottom + 20 }]}
       >
-        {(offline || (settings && planState === 'unknown')) && (
+        {(offline || (settings && planState === 'error')) && (
           <View style={styles.offlineBanner}>
             <Ionicons name="cloud-offline-outline" size={16} color="#92400E" />
             <Text style={styles.offlineText}>
               {offline
                 ? 'You are offline. Your saved preferences are shown, but keys can only be changed when you are back online.'
-                : 'Could not check your plan. Keys can only be changed once the check works.'}
+                : 'Could not check your enrollment. Keys can only be changed once the check works.'}
             </Text>
             <TouchableOpacity onPress={() => void load()} disabled={loading}>
               <Text style={styles.offlineRetry}>Retry</Text>
@@ -317,18 +306,27 @@ export default function AITeacherSettingsScreen() {
           </View>
         )}
 
-        {/* 1. Status */}
+        {/* 1. Enrollment status */}
         {settings && planActive && (
           <View style={styles.planActiveBadge}>
             <Ionicons name="checkmark-circle" size={14} color="#047857" />
-            <Text style={styles.planActiveText}>Plus plan active</Text>
+            <Text style={styles.planActiveText}>Enrolled</Text>
           </View>
         )}
 
-        {justPurchased && (
-          <View style={styles.purchasedBanner}>
-            <Ionicons name="checkmark-circle" size={18} color="#059669" />
-            <Text style={styles.purchasedBannerText}>Payment successful. Now add your Gemini key below.</Text>
+        {planState === 'inactive' && (
+          <View style={styles.sectionCard}>
+            <View style={styles.sectionHeaderRow}>
+              <Ionicons name="school" size={18} color={colors.primary} />
+              <Text style={styles.sectionTitle}>Enroll in a course to start</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.linkRow}
+              onPress={() => navigation.navigate('Courses')}
+            >
+              <Ionicons name="arrow-forward" size={14} color="#059669" />
+              <Text style={styles.guideLinkBtnText}>Browse courses</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -362,9 +360,9 @@ export default function AITeacherSettingsScreen() {
               <Text style={styles.emptyKeysText}>
                 {planActive
                   ? 'Add your Gemini key to start using Ask AI.'
-                  : planState === 'unknown'
-                    ? 'Your keys will show here once the plan check works.'
-                    : 'No keys saved yet. Buy Plus to add your keys.'}
+                  : planState === 'error'
+                    ? 'Your keys will show here once the enrollment check works.'
+                    : 'Enroll in a course to add your keys.'}
               </Text>
             </View>
           )}

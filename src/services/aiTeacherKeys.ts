@@ -1,7 +1,6 @@
-import { SUPABASE_URL, SUPABASE_ANON_KEY, getValidAccessToken, supabase } from './supabase';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, getValidAccessToken } from './supabase';
 import { TeacherPrefs, savePrefs } from './aiTeacherPrefs';
 import { fetchWithTimeout } from '../utils/fetchWithTimeout';
-import { writePlanCache } from './aiTeacherPlan';
 
 /**
  * Student-owned Gemini keys (up to 10) stored on the server and shared with the web app.
@@ -21,10 +20,13 @@ export interface AiTeacherKey {
   lastUsedAt: string | null;
 }
 
-/** Student plan state from the server. Keys can only be added once the Plus plan (Rs 500) is bought. */
+/**
+ * Student enrollment state from the server: `active` is true when the student is logged in and has at least one
+ * active, unexpired course enrollment (the same rule as the website). Keys can only be added while active.
+ */
 export interface AiTeacherPlan {
   active: boolean;
-  planName: 'plus' | null;
+  planName?: string | null;
 }
 
 export interface AiTeacherSettings {
@@ -32,12 +34,9 @@ export interface AiTeacherSettings {
   keys: AiTeacherKey[];
   activeKeyId: string | null;
   maxKeys: number;
-  /** Missing when the server response has no plan field: the plan is then unknown, not inactive. */
+  /** Missing when the server response has no plan field: the state is then unknown ('error'), not inactive. */
   plan?: AiTeacherPlan;
 }
-
-/** The plan to assume when a caller needs a boolean and the server has not said (not used for redirects). */
-export const DEFAULT_AI_TEACHER_PLAN: AiTeacherPlan = { active: false, planName: null };
 
 export type AiTeacherKeyErrorCode =
   | 'INVALID_KEY'
@@ -98,15 +97,10 @@ async function keysApi(action: string, body: Record<string, unknown> = {}): Prom
   }
 
   const settings = data as AiTeacherSettings;
-  // No plan field (older server): left missing, so the app treats the plan as unknown, not as not bought.
+  // No plan field (older server): left missing, so the app treats the state as unknown, not as not enrolled.
   if (settings?.prefs) {
     // Keep the offline cache of persona prefs fresh; keys are never cached on the device.
     await savePrefs(settings.prefs as TeacherPrefs).catch(() => undefined);
-  }
-  if (settings?.plan && typeof settings.plan.active === 'boolean') {
-    // Keep the per-user plan cache fresh; it is only read when the server cannot be reached.
-    const user = await supabase.getStoredUser().catch(() => null);
-    if (user?.id) await writePlanCache(user.id, settings.plan.active);
   }
   return settings;
 }

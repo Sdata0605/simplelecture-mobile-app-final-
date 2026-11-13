@@ -1,6 +1,5 @@
 import { SUPABASE_URL, SUPABASE_ANON_KEY, getValidAccessToken } from './supabase';
 import { TeacherPrefs, personaPayload } from './aiTeacherPrefs';
-import { loadSubscription } from './aiTeacherSubscription';
 
 export interface TeacherSubject {
   id: string;

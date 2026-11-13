@@ -26,9 +26,6 @@ import HeaderMenuButton from '../components/HeaderMenuButton';
 import HomeHeroBanner from '../components/HomeHeroBanner';
 import HeroVideoBanner from '../components/HeroVideoBanner';
 import AITeacherShowcase from '../components/aiteacher/AITeacherShowcase';
-import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
-import { useAiTeacherPlan } from '../services/aiTeacherPlan';
-import { openAskAI } from '../services/askAIStore';
 import { useCourseFreePreviewLimits } from '../hooks/useCourseFreeAccess';
 
 const SSLC_COURSE_ID = '4c10bc8e-acbc-4b76-b7f5-54376c030cb0';
@@ -43,14 +40,6 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { user, refreshUser } = useAuth();
   const { openSidebar } = useSidebar();
-  const { plans } = useAITeacherSubscription();
-  // The server's answer on the Plus plan. The purchase card only shows when it said 'inactive'.
-  const { state: planState, refresh: refreshPlan } = useAiTeacherPlan(!!user);
-  useFocusEffect(
-    useCallback(() => {
-      refreshPlan();
-    }, [refreshPlan]),
-  );
   const { aiLimit: sslcAiLimit, doubtsLimit: sslcDoubtsLimit } = useCourseFreePreviewLimits(SSLC_COURSE_ID);
 
   const [featuredMyCourses, setFeaturedMyCourses] = useState<ExploreCourse[]>([]);
@@ -63,11 +52,9 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [notifUnreadCount, setNotifUnreadCount] = useState(0);
 
-  // The promo card leads to Ask AI, except when the server said there is no plan: then to the plans.
   const openAITeacher = useCallback(() => {
-    if (planState === 'inactive') navigation.navigate('AITeacherPlus');
-    else openAskAI();
-  }, [planState, navigation]);
+    navigation.navigate('AITeacher');
+  }, [navigation]);
 
   const loadHomeData = useCallback(async () => {
     setLoadingFeatured(true);
@@ -279,7 +266,7 @@ export default function HomeScreen() {
 
             <HeroVideoBanner />
 
-            {planState === 'inactive' && <AITeacherShowcase price={plans.byok_500.price} onPress={openAITeacher} />}
+            <AITeacherShowcase onPress={openAITeacher} />
 
             {enrolledMyCourses.length > 0 && (
               <View style={styles.section}>

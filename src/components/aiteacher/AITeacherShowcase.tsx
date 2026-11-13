@@ -1,6 +1,5 @@
-// The Home screen's pitch for the AI Teacher, shown to students without a plan: a sample lesson that plays by
-// itself (a question, then the teacher explaining step by step, with the same orb as the Ask AI screen), what they
-// get, and one button to the plans.
+// The Home screen's pitch for the AI Teacher: a sample lesson that plays by itself (a question, then the teacher
+// explaining step by step, with the same orb as the Ask AI screen), what they get, and one button into the AI Teacher.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -83,13 +82,11 @@ function StepLine({ step }: { step: string }) {
 }
 
 interface Props {
-  /** The lowest plan price, shown as "From ₹…". */
-  price: number;
-  /** Opens the plans. */
+  /** Opens the AI Teacher. */
   onPress: () => void;
 }
 
-export function AITeacherShowcase({ price, onPress }: Props) {
+export function AITeacherShowcase({ onPress }: Props) {
   const { state, choose, reduceMotion } = usePromoDemo();
   const demo = PROMO_DEMOS[state.demo] ?? PROMO_DEMOS[0];
   const phase = demoPhase(state);
@@ -113,9 +110,6 @@ export function AITeacherShowcase({ price, onPress }: Props) {
         <View style={styles.badge}>
           <Ionicons name="sparkles" size={12} color={ask.gold} />
           <Text style={styles.badgeText}>{PROMO_BADGE}</Text>
-        </View>
-        <View style={styles.price}>
-          <Text style={styles.priceText}>From ₹{price}</Text>
         </View>
       </View>
 
@@ -221,8 +215,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(245, 198, 106, 0.3)',
   },
   badgeText: { color: ask.gold, fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },
-  price: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: ask.mintFill },
-  priceText: { color: ask.mint, fontSize: 11, fontWeight: '800' },
   title: { color: ask.ink, fontSize: 23, lineHeight: 29, fontWeight: '800' },
   subtitle: { color: ask.muted, fontSize: 13, lineHeight: 19, marginTop: 6 },
 

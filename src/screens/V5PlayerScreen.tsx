@@ -24,7 +24,7 @@ import { AskAIAssistant } from '../components/askAssistant/AskAIAssistant';
 import { useTeacherSubject } from '../hooks/useTeacherSubject';
 import { useEndOfLecturePrompt } from '../hooks/useEndOfLecturePrompt';
 import { useAuth } from '../context/AuthContext';
-import { useAITeacherSubscription } from '../services/aiTeacherSubscription';
+import { useAiTeacherPlan } from '../services/aiTeacherPlan';
 import { buildAskContext } from '../services/askAssistant/lectureContext';
 import type { LectureAskContext } from '../services/askAssistant/lectureLesson';
 import { openAskAI } from '../services/askAIStore';
@@ -92,7 +92,9 @@ export default function V5PlayerScreen() {
   // Until the list loads, or if it fails, the player simply has no Ask AI button.
   const teacherSubject = useTeacherSubject(subjectId);
   const { user, isAuthenticated } = useAuth();
-  const { hasActivePlan } = useAITeacherSubscription();
+  // Same enrollment check as the AI Teacher screen (the server's answer; logged out is never active).
+  const { state: enrollmentState } = useAiTeacherPlan(!!isAuthenticated);
+  const hasActivePlan = enrollmentState === 'active';
   const [askAIOpen, setAskAIOpen] = useState(false);
   // Which opening the Ask AI screen uses: 'mid' (sparkle button) or 'end' (after the end-of-lecture card).
   const [askTrigger, setAskTrigger] = useState<'mid' | 'end'>('mid');
@@ -384,12 +386,6 @@ export default function V5PlayerScreen() {
       setPlayIntent(true);
     }
   }, [setPlayIntent]);
-
-  // No AI Teacher plan: leave the lecture for the plans screen (the player's own back handling restores the orientation).
-  const handleOpenPlans = useCallback(() => {
-    handleCloseAskAI();
-    navigation.navigate('AITeacher');
-  }, [handleCloseAskAI, navigation]);
 
   // The "Ask AI" quick action opens Ask AI right here (the lecture is paused and handed to it), not the old AI tab.
   const handleAskQuickAction = useCallback(() => {
@@ -869,7 +865,6 @@ export default function V5PlayerScreen() {
           topicTitle={title}
           lectureLanguage={language}
           context={askContext}
-          onOpenPlans={handleOpenPlans}
         />
       )}
     </View>

@@ -1,5 +1,5 @@
 // The floating AI button on every screen. Mounted once in App, over the navigator (like <AskAIHost />), so it does
-// not belong to any one screen. Tapping it opens Ask AI with a plan, otherwise the plans. The student can drag it
+// not belong to any one screen. Tapping it opens Ask AI, which shows the enrollment state. The student can drag it
 // out of the way; where they leave it is remembered.
 import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
@@ -13,7 +13,6 @@ import { openAskAI, useAskAIRequest } from '../../services/askAIStore';
 import { useCurrentRouteName } from '../../services/currentRoute';
 import { tabBarTop } from '../CustomTabBar';
 import { AITeacherFab } from './AITeacherFab';
-import { navigationRef } from '../../navigation/AppNavigator';
 
 const PLACEMENT_KEY = '@ai_fab_placement';
 const FAB_SIZE = 64;
@@ -24,8 +23,8 @@ export function GlobalAIButton() {
   const askOpen = useAskAIRequest() !== null;
   const { isOpen: sidebarOpen } = useSidebar();
   const { user } = useAuth();
-  // Re-checked on every route change, so a purchase made on another screen is picked up here.
-  const { state: planState, refresh: refreshPlan } = useAiTeacherPlan(!!user);
+  // Re-checked on every route change, so an enrollment made on another screen is picked up here.
+  const { refresh: refreshPlan } = useAiTeacherPlan(!!user);
   useEffect(() => {
     refreshPlan();
   }, [routeName, refreshPlan]);
@@ -51,12 +50,10 @@ export function GlobalAIButton() {
     AsyncStorage.setItem(PLACEMENT_KEY, JSON.stringify(placement)).catch(() => {});
   }, []);
 
-  // Only a server answer of "no plan" goes to the plans page. Active, unknown or still loading opens Ask AI,
-  // which shows its own spinner or retry message.
+  // Ask AI shows the right state itself: log in, checking, retry, enroll, add key, or the teacher.
   const open = useCallback(() => {
-    if (planState === 'inactive') navigationRef.current?.navigate('AITeacherPlus');
-    else openAskAI();
-  }, [planState]);
+    openAskAI();
+  }, []);
 
   const landscape = !!box && box.width > box.height;
   const visible = loaded && !!box && shouldShowAIFab({ routeName, askOpen, sidebarOpen, landscape });
@@ -66,7 +63,6 @@ export function GlobalAIButton() {
     <View pointerEvents="box-none" style={styles.overlay} onLayout={onLayout}>
       {visible && box && (
         <AITeacherFab
-          hasActivePlan={planState !== 'inactive'}
           onPress={open}
           box={box}
           placement={clampPlacement(placement, box, insets, FAB_SIZE)}
